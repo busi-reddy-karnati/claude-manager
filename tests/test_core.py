@@ -12,7 +12,14 @@ from claude_manager.core import (  # noqa: E402
     discover_sessions,
     parse_session,
 )
+from claude_manager.launch import (  # noqa: E402
+    LaunchError,
+    build_launch_argv,
+    launch_session,
+)
 from claude_manager.render import human_age, human_count, render_overview  # noqa: E402
+
+import pytest  # noqa: E402
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -114,6 +121,115 @@ def test_humanizers():
     assert human_count(1500) == "1.5k"
     assert human_count(2_000_000) == "2M"
     assert human_age(None) == "-"
+
+
+def test_build_launch_argv_ghostty(tmp_path):
+    from claude_manager.core import Session
+
+    s = Session(session_id="abcd-1234", path=tmp_path / "x.jsonl",
+                project_path="/home/user/proj")
+    argv = build_launch_argv(s, terminal="ghostty", claude_bin="claude")
+    assert argv == [
+        "ghostty",
+        "--working-directory=/home/user/proj",
+        "-e",
+        "claude",
+        "--resume",
+        "abcd-1234",
+    ]
+
+
+def test_build_launch_argv_generic_terminal(tmp_path):
+    from claude_manager.core import Session
+
+    s = Session(session_id="id1", path=tmp_path / "x.jsonl",
+                project_path="/tmp/my proj")
+    argv = build_launch_argv(s, terminal="xterm", claude_bin="claude")
+    assert argv[0] == "xterm"
+    assert argv[1] == "-e"
+    # The cwd (with a space) must be safely quoted inside the shell command.
+    joined = argv[-1]
+    assert "cd '/tmp/my proj'" in joined
+    assert "claude --resume id1" in joined
+
+
+def test_launch_session_missing_terminal_raises(tmp_path):
+    from claude_manager.core import Session
+
+    s = Session(session_id="id1", path=tmp_path / "x.jsonl")
+    with pytest.raises(LaunchError):
+        launch_session(s, terminal="definitely-not-a-real-terminal-xyz")
+
+
+def test_build_launch_argv_macos_terminal(tmp_path):
+    from claude_manager.core import Session
+
+    s = Session(session_id="id1", path=tmp_path / "x.jsonl", project_path="/w")
+    argv = build_launch_argv(s, terminal="Terminal", claude_bin="claude")
+    assert argv[0] == "osascript"
+    joined = " ".join(argv)
+    assert "Terminal" in joined and "do script" in joined
+    assert "claude --resume id1" in joined
+
+
+def test_build_launch_argv_gnome_and_kitty(tmp_path):
+    from claude_manager.core import Session
+
+    s = Session(session_id="id1", path=tmp_path / "x.jsonl", project_path="/w")
+    gnome = build_launch_argv(s, terminal="gnome-terminal", claude_bin="claude")
+    assert gnome == ["gnome-terminal", "--working-directory=/w", "--",
+                     "claude", "--resume", "id1"]
+    kitty = build_launch_argv(s, terminal="kitty", claude_bin="claude")
+    assert kitty == ["kitty", "--directory", "/w", "claude", "--resume", "id1"]
+
+
+def _make_sessions(n):
+    from claude_manager.core import Session
+
+    return [Session(session_id=f"id{i:03d}", path=Path(f"/tmp/{i}.jsonl"),
+                    project_path=f"/p/{i}", title=f"task {i}") for i in range(n)]
+
+
+def test_console_pagination():
+    from claude_manager.console import SessionConsole
+
+    c = SessionConsole(_make_sessions(25), page_size=10, color=False)
+    assert c.total_pages == 3
+    assert c.can_prev is False and c.can_next is True
+    start, page = c.page_slice()
+    assert start == 0 and len(page) == 10
+    assert c.handle("n") == ("next", None)
+    assert c.page == 1
+    assert c.handle("p") == ("prev", None)
+    assert c.page == 0
+    # Paging past the ends is reported, not silently wrapped.
+    assert c.handle("p")[0] == "message"
+    c.page = 2
+    assert c.handle("n")[0] == "message"
+
+
+def test_console_select_by_number():
+    from claude_manager.console import SessionConsole
+
+    sessions = _make_sessions(25)
+    c = SessionConsole(sessions, page_size=10, color=False)
+    action, payload = c.handle("13")
+    assert action == "open" and payload is sessions[12]
+    # Global numbering works even when off the current page.
+    assert c.page == 0
+    assert c.handle("0")[0] == "message"
+    assert c.handle("99")[0] == "message"
+    assert c.handle("q") == ("quit", None)
+    assert c.handle("") == ("noop", None)
+
+
+def test_console_render_has_numbers_and_buttons():
+    from claude_manager.console import SessionConsole
+
+    c = SessionConsole(_make_sessions(3), page_size=10, color=False)
+    text = c.render()
+    assert "[1]" in text and "[3]" in text
+    assert "Prev" in text and "Next" in text and "Quit" in text
 
 
 if __name__ == "__main__":

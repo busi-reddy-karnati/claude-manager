@@ -17,12 +17,26 @@ _COLORS = {
     "reset": "\033[0m",
     "dim": "\033[2m",
     "bold": "\033[1m",
+    "italic": "\033[3m",
+    "underline": "\033[4m",
+    # Foreground.
+    "black": "\033[30m",
     "red": "\033[31m",
     "green": "\033[32m",
     "yellow": "\033[33m",
     "blue": "\033[34m",
     "magenta": "\033[35m",
     "cyan": "\033[36m",
+    "white": "\033[37m",
+    "gray": "\033[90m",
+    "bright_green": "\033[92m",
+    "bright_yellow": "\033[93m",
+    "bright_cyan": "\033[96m",
+    # Background.
+    "bg_red": "\033[41m",
+    "bg_green": "\033[42m",
+    "bg_blue": "\033[44m",
+    "bg_white": "\033[47m",
 }
 
 
@@ -69,6 +83,15 @@ def human_age(ts: datetime | None, now: datetime | None = None) -> str:
     if seconds < 86400 * 30:
         return f"{int(seconds // 86400)}d"
     return ts.strftime("%Y-%m-%d")
+
+
+def age_styles(age: str) -> tuple[str, ...]:
+    """Colour an age string by recency: green=minutes, yellow=hours, dim=old."""
+    if age and age[-1] in ("s", "m"):
+        return ("green",)
+    if age.endswith("h"):
+        return ("yellow",)
+    return ("dim",)
 
 
 def human_dt(ts: datetime | None) -> str:
@@ -133,13 +156,18 @@ def render_overview(
     total_tokens = sum(s.usage.total for s in sessions)
     header = paint("Claude Code Manager", "bold", "cyan")
     out.append(header)
-    summary = (
-        f"{_plural(len(sessions), 'session')}  ·  "
-        f"{_plural(len(projects), 'project')}  ·  "
-        f"{live} live  ·  {human_count(total_tokens)} tokens  ·  "
-        f"{_plural(len(memories), 'memory file')}"
+    sep = paint("  ·  ", "dim")
+    summary = sep.join(
+        [
+            paint(_plural(len(sessions), "session"), "cyan"),
+            paint(_plural(len(projects), "project"), "blue"),
+            paint(f"{live} live", "green", "bold") if live
+            else paint("0 live", "dim"),
+            paint(f"{human_count(total_tokens)} tokens", "bright_yellow"),
+            paint(_plural(len(memories), "memory file"), "magenta"),
+        ]
     )
-    out.append(paint(summary, "dim"))
+    out.append("  " + summary)
     out.append("")
 
     # --- Sessions table --------------------------------------------------
@@ -167,18 +195,19 @@ def render_overview(
         head = f"{head} {_pad('TITLE', title_w)}"
         out.append(paint(head, "dim"))
         for s in shown:
-            marker = paint("●", "green") if s.is_live else " "
+            marker = paint("●", "green", "bold") if s.is_live else " "
             age = human_age(s.last_ts, now)
+            title = _truncate(s.title or "(no prompt)", title_w)
             row = " ".join(
                 [
                     marker,
-                    _pad(age, 5),
-                    _pad(_truncate(s.project_name, 16), 16),
-                    _pad(_truncate(s.git_branch or "-", 14), 14),
-                    _pad(s.short_id, 8),
-                    _pad(human_count(s.message_count), 5),
-                    _pad(human_count(s.usage.total), 7),
-                    _truncate(s.title or "(no prompt)", title_w),
+                    paint(_pad(age, 5), *age_styles(age)),
+                    paint(_pad(_truncate(s.project_name, 16), 16), "cyan"),
+                    paint(_pad(_truncate(s.git_branch or "-", 14), 14), "magenta"),
+                    paint(_pad(s.short_id, 8), "dim"),
+                    paint(_pad(human_count(s.message_count), 5), "blue"),
+                    paint(_pad(human_count(s.usage.total), 7), "green"),
+                    title if not s.is_live else paint(title, "bold"),
                 ]
             )
             out.append(row)
@@ -197,11 +226,11 @@ def render_overview(
         for m in memories:
             scope_color = "magenta" if m.scope == "user" else "blue"
             row = (
-                f"  {paint(_pad(m.scope, 8), scope_color)} "
-                f"{_pad(_truncate(m.project_name, 16), 16)} "
-                f"{_pad(human_dt(m.modified), 16)} "
-                f"{_pad(human_size(m.size), 6)} "
-                f"{_pad(str(m.lines), 6)} "
+                f"  {paint(_pad(m.scope, 8), scope_color, 'bold')} "
+                f"{paint(_pad(_truncate(m.project_name, 16), 16), 'cyan')} "
+                f"{paint(_pad(human_dt(m.modified), 16), 'dim')} "
+                f"{paint(_pad(human_size(m.size), 6), 'yellow')} "
+                f"{paint(_pad(str(m.lines), 6), 'blue')} "
                 f"{paint(_truncate(str(m.path), max(10, width - 60)), 'dim')}"
             )
             out.append(row)
