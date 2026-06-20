@@ -8,18 +8,44 @@ live process metadata, `CLAUDE.md` memory files), but it's spread across many
 files and not easy to survey at a glance. `claude-manager` reads that state
 directly and renders a compact dashboard in your terminal.
 
-It has **no dependencies** — just Python 3.10+ and the standard library.
+It has **no dependencies** — just Python 3.9+ and the standard library.
 
-## Quick start
+## Install
+
+One line — downloads the source, builds a single self-contained executable with
+your local Python (no dependencies), and installs it to `~/.local/bin`:
 
 ```bash
-# Run straight from the repo (no install needed)
-python3 -m claude_manager
+curl -fsSL https://raw.githubusercontent.com/busi-reddy-karnati/claude-manager/main/install.sh | bash
+```
 
-# …or install it to get the `claude-manager` command
-pip install -e .
+Then just run:
+
+```bash
 claude-manager
 ```
+
+Prefer not to pipe to `bash`? Download and read it first, or install from a clone:
+
+```bash
+git clone https://github.com/busi-reddy-karnati/claude-manager
+cd claude-manager
+make install        # builds dist/claude-manager and copies it to ~/.local/bin
+```
+
+The installer honours `CLAUDE_MANAGER_BIN_DIR` (install location),
+`CLAUDE_MANAGER_REF` (branch/tag/commit), and `CLAUDE_MANAGER_REPO`. To remove
+it: `make uninstall` (or delete `~/.local/bin/claude-manager`).
+
+<details>
+<summary>Other ways to run it</summary>
+
+* **From source, no install:** `python3 -m claude_manager`
+* **As a pip/pipx package:** `pipx install .` (uses the `claude-manager` entry point)
+* **Build the single file yourself:** `make build` → `./dist/claude-manager`
+</details>
+
+## Quick start
 
 ## What you see
 
