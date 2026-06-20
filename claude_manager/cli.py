@@ -188,6 +188,31 @@ def cmd_open(args) -> int:
     return 0
 
 
+def cmd_console(args) -> int:
+    from claude_manager.console import SessionConsole
+
+    home = Path(args.home).expanduser() if args.home else default_home()
+    sessions = _filter_sessions(discover_sessions(home), args.project)
+    if not sessions:
+        print("No sessions found.", file=sys.stderr)
+        return 1
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        print("The console needs an interactive terminal (a TTY).", file=sys.stderr)
+        return 1
+    console = SessionConsole(
+        sessions,
+        page_size=args.page_size,
+        terminal=args.terminal,
+        claude_bin=args.claude_bin,
+        color=_color_flag(args),
+    )
+    try:
+        console.run()
+    except KeyboardInterrupt:
+        print()
+    return 0
+
+
 def cmd_browse(args) -> int:
     from claude_manager.browse import browse  # imported lazily (needs a TTY)
 
@@ -235,7 +260,8 @@ def build_parser() -> argparse.ArgumentParser:
     launch_opts = argparse.ArgumentParser(add_help=False)
     launch_opts.add_argument(
         "--terminal",
-        help="Terminal to open (default: ghostty; or CLAUDE_MANAGER_TERMINAL)",
+        help="Terminal to open (default: your platform's default terminal; "
+        "or set CLAUDE_MANAGER_TERMINAL / TERMINAL)",
     )
     launch_opts.add_argument(
         "--claude-bin", dest="claude_bin",
@@ -243,6 +269,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     sub = parser.add_subparsers(dest="command")
+
+    p_con = sub.add_parser(
+        "console", parents=[common, launch_opts],
+        help="Interactive numbered console — type a # to resume, n/p to page",
+    )
+    p_con.add_argument("--page-size", type=int, default=10,
+                       help="Sessions per page (default: 10)")
+    p_con.set_defaults(func=cmd_console)
 
     p_over = sub.add_parser("overview", parents=[common],
                             help="Dashboard of sessions and memory (default)")
@@ -281,8 +315,13 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     # Default to the overview command when none is given.
-    known = {"overview", "sessions", "show", "memory", "browse", "open"}
-    if not argv or (argv[0] not in known and argv[0] not in ("-h", "--help", "--version")):
+    known = {"overview", "sessions", "show", "memory", "browse", "open", "console"}
+    if not argv:
+        # Bare invocation: drop into the interactive console on a TTY,
+        # otherwise print the static overview (e.g. when piped).
+        argv = ["console"] if sys.stdin.isatty() and sys.stdout.isatty() \
+            else ["overview"]
+    elif argv[0] not in known and argv[0] not in ("-h", "--help", "--version"):
         argv = ["overview"] + argv
     args = parser.parse_args(argv)
     if not hasattr(args, "func"):

@@ -46,6 +46,33 @@ class _Browser:
         self.selected = 0
         self.top = 0  # first visible session index (scroll offset)
         self.status = "↑/↓ move · Enter/click open in terminal · q quit"
+        self._colors: dict[str, int] = {}
+
+    def _color(self, name: str) -> int:
+        """Return a curses attribute for a colour, or 0 if unsupported."""
+        return self._colors.get(name, 0)
+
+    def _init_colors(self) -> None:
+        if not curses.has_colors():
+            return
+        curses.start_color()
+        try:
+            curses.use_default_colors()
+            bg = -1
+        except curses.error:
+            bg = curses.COLOR_BLACK
+        palette = {
+            "cyan": curses.COLOR_CYAN,
+            "green": curses.COLOR_GREEN,
+            "yellow": curses.COLOR_YELLOW,
+            "magenta": curses.COLOR_MAGENTA,
+        }
+        for i, (name, fg) in enumerate(palette.items(), start=1):
+            try:
+                curses.init_pair(i, fg, bg)
+                self._colors[name] = curses.color_pair(i)
+            except curses.error:
+                pass
 
     # -- geometry ------------------------------------------------------
     HEADER_ROWS = 3   # title + summary + column header
@@ -82,7 +109,8 @@ class _Browser:
         live = sum(1 for s in self.sessions if s.is_live)
         title = "Claude Code Manager — sessions"
         summary = f"{len(self.sessions)} sessions · {live} live"
-        stdscr.addnstr(0, 0, title, maxx - 1, curses.A_BOLD)
+        stdscr.addnstr(0, 0, title, maxx - 1,
+                       curses.A_BOLD | self._color("cyan"))
         stdscr.addnstr(1, 0, summary, maxx - 1, curses.A_DIM)
         header = (" " + "AGE".ljust(5) + " " + "PROJECT".ljust(16) + " "
                   + "BRANCH".ljust(14) + " " + "ID".ljust(8) + " "
@@ -96,16 +124,17 @@ class _Browser:
                 break
             session = self.sessions[idx]
             text = _fmt_row(session, now, maxx)
-            attr = curses.A_NORMAL
             if idx == self.selected:
-                attr = curses.A_REVERSE
+                attr = curses.A_REVERSE | curses.A_BOLD
             elif session.is_live:
-                attr = curses.A_BOLD
+                attr = curses.A_BOLD | self._color("green")
+            else:
+                attr = self._color("cyan")
             stdscr.addnstr(self.HEADER_ROWS + row, 0, text.ljust(maxx - 1),
                            maxx - 1, attr)
 
         stdscr.addnstr(maxy - 1, 0, self.status[: maxx - 1].ljust(maxx - 1),
-                       maxx - 1, curses.A_REVERSE)
+                       maxx - 1, curses.A_REVERSE | self._color("yellow"))
         stdscr.refresh()
 
     # -- actions -------------------------------------------------------
@@ -124,6 +153,7 @@ class _Browser:
     # -- main loop -----------------------------------------------------
     def run(self, stdscr) -> None:
         curses.curs_set(0)
+        self._init_colors()
         try:
             curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
         except curses.error:

@@ -1,43 +1,71 @@
-"""Launch a Claude Code session in a terminal (Ghostty by default).
+"""Launch a Claude Code session in the user's default terminal.
 
-Clicking a session in the interactive browser, or running ``claude-manager
-open <id>``, opens a fresh terminal window whose shell runs
-``claude --resume <sessionId>`` in that session's original working directory --
-dropping you straight back into the conversation.
+Selecting a session (in the console or via ``claude-manager open <id>``) opens a
+new terminal window whose shell runs ``claude --resume <sessionId>`` in that
+session's original working directory.
 
-The terminal is configurable so this works beyond Ghostty:
+By default we open the platform's **default terminal**:
 
-* ``--terminal`` / ``CLAUDE_MANAGER_TERMINAL`` overrides the terminal binary.
+* macOS  -> Terminal.app (driven via ``osascript``).
+* Linux  -> ``$TERMINAL`` if set, else the Debian ``x-terminal-emulator``
+  alternative, else the first known terminal found on ``PATH``.
+
+It stays configurable:
+
+* ``--terminal`` / ``CLAUDE_MANAGER_TERMINAL`` overrides the terminal.
 * ``--claude-bin`` / ``CLAUDE_MANAGER_CLAUDE_BIN`` overrides the ``claude`` CLI.
 
-Command construction is pure and side-effect free (see :func:`build_launch_argv`)
-so it can be unit-tested without a GUI; :func:`launch_session` performs the
-actual spawn.
+Command construction (:func:`build_launch_argv`) is pure and unit-testable;
+:func:`launch_session` performs the actual spawn.
 """
 
 from __future__ import annotations
 
 import os
+import platform
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
 
 from claude_manager.core import Session
 
-DEFAULT_TERMINAL = "ghostty"
 DEFAULT_CLAUDE_BIN = "claude"
 
-# Per-terminal recipes for "open a new window, in this directory, running this
-# command". Each entry maps the terminal's basename to a builder that takes the
-# working directory and the command argv and returns a full argv list.
-#
-# Ghostty:  ghostty --working-directory=<cwd> -e claude --resume <id>
-# Most xterm-likes accept `-e <cmd>` and we prefix a `cd` via a login shell when
-# they have no working-directory flag.
+# Linux terminals tried, in order, when no terminal is configured. The Debian
+# "x-terminal-emulator" alternative points at whatever the user set as default.
+_LINUX_TERMINALS = (
+    "x-terminal-emulator",
+    "gnome-terminal",
+    "konsole",
+    "xfce4-terminal",
+    "tilix",
+    "alacritty",
+    "kitty",
+    "wezterm",
+    "ghostty",
+    "xterm",
+)
+
+
+def detect_default_terminal() -> str:
+    """Return the platform's default terminal identifier (no env lookups)."""
+    system = platform.system()
+    if system == "Darwin":
+        return "Terminal"  # Terminal.app, launched via osascript.
+    for candidate in _LINUX_TERMINALS:
+        if shutil.which(candidate):
+            return candidate
+    return "xterm"
 
 
 def resolve_terminal(terminal: str | None = None) -> str:
-    return terminal or os.environ.get("CLAUDE_MANAGER_TERMINAL") or DEFAULT_TERMINAL
+    if terminal:
+        return terminal
+    env = os.environ.get("CLAUDE_MANAGER_TERMINAL") or os.environ.get("TERMINAL")
+    if env:
+        return env
+    return detect_default_terminal()
 
 
 def resolve_claude_bin(claude_bin: str | None = None) -> str:
@@ -48,9 +76,15 @@ def resolve_claude_bin(claude_bin: str | None = None) -> str:
     )
 
 
-def build_resume_argv(session: Session, claude_bin: str | None = None) -> list[str]:
-    """The inner command that resumes the session."""
-    return [resolve_claude_bin(claude_bin), "--resume", session.session_id]
+def _osascript_escape(value: str) -> str:
+    """Escape a string for embedding inside an AppleScript double-quoted literal."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _shell_command(cwd: str, resume: list[str]) -> str:
+    """A POSIX-shell one-liner that cd's into ``cwd`` then execs ``resume``."""
+    quoted = " ".join(shlex.quote(a) for a in resume)
+    return f"cd {shlex.quote(cwd)} && exec {quoted}"
 
 
 def build_launch_argv(
@@ -59,11 +93,11 @@ def build_launch_argv(
     terminal: str | None = None,
     claude_bin: str | None = None,
 ) -> list[str]:
-    """Build the full terminal-launch argv for ``session``.
+    """Build the full argv that opens ``session`` in a terminal.
 
-    Ghostty (and the common case) gets a native ``--working-directory`` flag.
-    Other terminals fall back to ``-e <shell> -lc 'cd … && claude --resume …'``
-    so the session still starts in the right directory.
+    Each terminal family gets a recipe that (a) starts in the session's working
+    directory and (b) runs ``claude --resume <id>``. Unknown terminals fall back
+    to the widely-supported ``-e sh -lc 'cd … && claude …'`` form.
     """
     term = resolve_terminal(terminal)
     cbin = resolve_claude_bin(claude_bin)
@@ -71,18 +105,36 @@ def build_launch_argv(
     resume = [cbin, "--resume", session.session_id]
     base = os.path.basename(term)
 
-    if base in ("ghostty",):
+    # macOS Terminal.app / iTerm via AppleScript.
+    if base in ("Terminal", "Terminal.app", "iTerm", "iTerm.app", "iTerm2"):
+        app = "iTerm" if "iterm" in base.lower() else "Terminal"
+        script = _osascript_escape(_shell_command(cwd, resume))
+        return [
+            "osascript",
+            "-e", f'tell application "{app}" to activate',
+            "-e", f'tell application "{app}" to do script "{script}"',
+        ]
+    if base == "ghostty":
         return [term, f"--working-directory={cwd}", "-e", *resume]
+    if base == "gnome-terminal":
+        # Modern gnome-terminal uses `--` to delimit the command.
+        return [term, f"--working-directory={cwd}", "--", *resume]
+    if base == "konsole":
+        return [term, "--workdir", cwd, "-e", *resume]
+    if base == "xfce4-terminal":
+        return [term, f"--working-directory={cwd}", "-x", *resume]
+    if base == "tilix":
+        return [term, "--working-directory", cwd, "-e",
+                " ".join(shlex.quote(a) for a in resume)]
+    if base == "kitty":
+        return [term, "--directory", cwd, *resume]
+    if base == "alacritty":
+        return [term, "--working-directory", cwd, "-e", *resume]
+    if base == "wezterm":
+        return [term, "start", "--cwd", cwd, "--", *resume]
 
-    # Generic xterm-style fallback: run a login shell that cd's first.
-    inner = f"cd {_shquote(cwd)} && exec {' '.join(_shquote(a) for a in resume)}"
-    return [term, "-e", "sh", "-lc", inner]
-
-
-def _shquote(value: str) -> str:
-    import shlex
-
-    return shlex.quote(value)
+    # Generic xterm-style (x-terminal-emulator, xterm, urxvt, st, …).
+    return [term, "-e", "sh", "-lc", _shell_command(cwd, resume)]
 
 
 class LaunchError(RuntimeError):
@@ -99,17 +151,18 @@ def launch_session(
     """Spawn a detached terminal running the resumed session.
 
     Returns the argv that was (or would be, for ``dry_run``) executed.
-    Raises :class:`LaunchError` if the terminal binary cannot be found.
+    Raises :class:`LaunchError` if the launcher binary cannot be found.
     """
-    term = resolve_terminal(terminal)
     argv = build_launch_argv(session, terminal=terminal, claude_bin=claude_bin)
     if dry_run:
         return argv
 
-    if shutil.which(term) is None and not os.path.isabs(term):
+    exe = argv[0]
+    if shutil.which(exe) is None and not os.path.isabs(exe):
+        term = resolve_terminal(terminal)
         raise LaunchError(
-            f"Terminal '{term}' not found on PATH. Install it, or pass "
-            f"--terminal <binary> (or set CLAUDE_MANAGER_TERMINAL)."
+            f"Terminal '{term}' (launcher '{exe}') not found on PATH. Install it, "
+            f"or pass --terminal <binary> (or set CLAUDE_MANAGER_TERMINAL)."
         )
 
     try:
@@ -121,5 +174,5 @@ def launch_session(
             start_new_session=True,  # detach so it outlives this process
         )
     except (OSError, ValueError) as exc:  # pragma: no cover - env dependent
-        raise LaunchError(f"Failed to launch '{term}': {exc}") from exc
+        raise LaunchError(f"Failed to launch '{exe}': {exc}") from exc
     return argv
