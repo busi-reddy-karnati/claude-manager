@@ -12,7 +12,14 @@ from claude_manager.core import (  # noqa: E402
     discover_sessions,
     parse_session,
 )
+from claude_manager.launch import (  # noqa: E402
+    LaunchError,
+    build_launch_argv,
+    launch_session,
+)
 from claude_manager.render import human_age, human_count, render_overview  # noqa: E402
+
+import pytest  # noqa: E402
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -114,6 +121,44 @@ def test_humanizers():
     assert human_count(1500) == "1.5k"
     assert human_count(2_000_000) == "2M"
     assert human_age(None) == "-"
+
+
+def test_build_launch_argv_ghostty(tmp_path):
+    from claude_manager.core import Session
+
+    s = Session(session_id="abcd-1234", path=tmp_path / "x.jsonl",
+                project_path="/home/user/proj")
+    argv = build_launch_argv(s, terminal="ghostty", claude_bin="claude")
+    assert argv == [
+        "ghostty",
+        "--working-directory=/home/user/proj",
+        "-e",
+        "claude",
+        "--resume",
+        "abcd-1234",
+    ]
+
+
+def test_build_launch_argv_generic_terminal(tmp_path):
+    from claude_manager.core import Session
+
+    s = Session(session_id="id1", path=tmp_path / "x.jsonl",
+                project_path="/tmp/my proj")
+    argv = build_launch_argv(s, terminal="xterm", claude_bin="claude")
+    assert argv[0] == "xterm"
+    assert argv[1] == "-e"
+    # The cwd (with a space) must be safely quoted inside the shell command.
+    joined = argv[-1]
+    assert "cd '/tmp/my proj'" in joined
+    assert "claude --resume id1" in joined
+
+
+def test_launch_session_missing_terminal_raises(tmp_path):
+    from claude_manager.core import Session
+
+    s = Session(session_id="id1", path=tmp_path / "x.jsonl")
+    with pytest.raises(LaunchError):
+        launch_session(s, terminal="definitely-not-a-real-terminal-xyz")
 
 
 if __name__ == "__main__":

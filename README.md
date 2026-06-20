@@ -43,11 +43,40 @@ MEMORY
 * `AGE` is the time since the last activity in that session.
 * `TOKENS` is the cumulative token usage (input + output + cache) for the session.
 
+## Open a session (click → Ghostty)
+
+`claude-manager browse` opens an **interactive, clickable** list. Move with the
+arrow keys (or `j`/`k`) and **click a row** — or press **Enter** — to open that
+session in a new [Ghostty](https://ghostty.org) window running
+`claude --resume <id>` in the session's original directory. Press `q` to quit.
+
+```bash
+claude-manager browse
+```
+
+You can also open a specific session straight from the command line:
+
+```bash
+claude-manager open dfe79c6e            # open in Ghostty
+claude-manager open dfe79c6e --dry-run  # just print the command
+```
+
+Not on Ghostty? Point it at any terminal — Ghostty gets a native
+`--working-directory`; other terminals are launched as
+`<term> -e sh -lc 'cd <cwd> && claude --resume <id>'`:
+
+```bash
+claude-manager open dfe79c6e --terminal kitty
+export CLAUDE_MANAGER_TERMINAL=wezterm   # or set it once
+```
+
 ## Commands
 
 | Command | Description |
 | --- | --- |
 | `claude-manager` / `overview` | Dashboard of sessions + memory (default). Add `--all` to list every session. |
+| `claude-manager browse` | Interactive, clickable session list — Enter/click opens the session in Ghostty. |
+| `claude-manager open <id>` | Open one session in a new terminal (`claude --resume`). `--dry-run` to preview. |
 | `claude-manager sessions` | Full session list (no truncation). |
 | `claude-manager show <id>` | Detailed view of one session (full or short id). |
 | `claude-manager memory` | List all `CLAUDE.md` memory files with timestamps. |
@@ -58,6 +87,8 @@ MEMORY
 * `--json` — emit machine-readable JSON instead of the table (great for scripting).
 * `--home <dir>` — point at a non-default Claude home (also honours `CLAUDE_CONFIG_DIR`).
 * `--color` / `--no-color` — force or disable ANSI colour (auto-detected by default).
+* `--terminal <bin>` / `--claude-bin <bin>` — (for `browse`/`open`) override the
+  terminal or the `claude` CLI used to launch sessions.
 
 ## Where the data comes from
 

@@ -16,6 +16,7 @@ from claude_manager.core import (
     discover_memory,
     discover_sessions,
 )
+from claude_manager.launch import LaunchError, build_launch_argv, launch_session
 from claude_manager.render import (
     render_overview,
     render_session_detail,
@@ -122,30 +123,83 @@ def cmd_sessions(args) -> int:
     return 0
 
 
-def cmd_show(args) -> int:
-    home = Path(args.home).expanduser() if args.home else default_home()
-    sessions = discover_sessions(home)
-    needle = args.session_id.lower()
-    matches = [
+def _match_sessions(sessions: list[Session], needle: str) -> list[Session]:
+    needle = needle.lower()
+    return [
         s
         for s in sessions
         if s.session_id.lower() == needle or s.short_id.lower() == needle
         or s.session_id.lower().startswith(needle)
     ]
+
+
+def _resolve_one(sessions: list[Session], session_id: str) -> Session | None:
+    """Return a single matching session, printing a diagnostic otherwise."""
+    matches = _match_sessions(sessions, session_id)
     if not matches:
-        print(f"No session matching '{args.session_id}'", file=sys.stderr)
-        return 1
-    if len(matches) > 1 and not args.json:
-        print(f"Ambiguous id '{args.session_id}' matches {len(matches)} sessions:",
+        print(f"No session matching '{session_id}'", file=sys.stderr)
+        return None
+    if len(matches) > 1:
+        print(f"Ambiguous id '{session_id}' matches {len(matches)} sessions:",
               file=sys.stderr)
         for s in matches:
             print(f"  {s.short_id}  {s.project_name}  {s.title[:50]}", file=sys.stderr)
-        return 1
-    session = matches[0]
+        return None
+    return matches[0]
+
+
+def cmd_show(args) -> int:
+    home = Path(args.home).expanduser() if args.home else default_home()
+    sessions = discover_sessions(home)
     if args.json:
-        print(json.dumps(_session_to_dict(session), default=_json_default, indent=2))
+        matches = _match_sessions(sessions, args.session_id)
+        if not matches:
+            print(f"No session matching '{args.session_id}'", file=sys.stderr)
+            return 1
+        print(json.dumps(_session_to_dict(matches[0]), default=_json_default, indent=2))
         return 0
+    session = _resolve_one(sessions, args.session_id)
+    if session is None:
+        return 1
     print(render_session_detail(session, color=_color_flag(args)))
+    return 0
+
+
+def cmd_open(args) -> int:
+    home = Path(args.home).expanduser() if args.home else default_home()
+    sessions = discover_sessions(home)
+    session = _resolve_one(sessions, args.session_id)
+    if session is None:
+        return 1
+    if args.dry_run:
+        argv = build_launch_argv(
+            session, terminal=args.terminal, claude_bin=args.claude_bin
+        )
+        print(" ".join(argv))
+        return 0
+    try:
+        argv = launch_session(
+            session, terminal=args.terminal, claude_bin=args.claude_bin
+        )
+    except LaunchError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(f"Opened {session.short_id} ({session.project_name}) — {' '.join(argv)}")
+    return 0
+
+
+def cmd_browse(args) -> int:
+    from claude_manager.browse import browse  # imported lazily (needs a TTY)
+
+    home = Path(args.home).expanduser() if args.home else default_home()
+    sessions = _filter_sessions(discover_sessions(home), args.project)
+    if not sessions:
+        print("No sessions found.", file=sys.stderr)
+        return 1
+    if not sys.stdout.isatty():
+        print("browse requires an interactive terminal (a TTY).", file=sys.stderr)
+        return 1
+    browse(sessions, terminal=args.terminal, claude_bin=args.claude_bin)
     return 0
 
 
@@ -177,6 +231,17 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--color", action="store_true", help="Force ANSI colour")
     common.add_argument("--no-color", action="store_true", help="Disable colour")
 
+    # Options for the commands that launch a terminal.
+    launch_opts = argparse.ArgumentParser(add_help=False)
+    launch_opts.add_argument(
+        "--terminal",
+        help="Terminal to open (default: ghostty; or CLAUDE_MANAGER_TERMINAL)",
+    )
+    launch_opts.add_argument(
+        "--claude-bin", dest="claude_bin",
+        help="Path to the claude CLI (default: claude)",
+    )
+
     sub = parser.add_subparsers(dest="command")
 
     p_over = sub.add_parser("overview", parents=[common],
@@ -191,6 +256,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_show.add_argument("session_id", help="Full or short session id")
     p_show.set_defaults(func=cmd_show)
 
+    p_browse = sub.add_parser(
+        "browse", parents=[common, launch_opts],
+        help="Interactive, clickable session list (Enter/click opens Ghostty)",
+    )
+    p_browse.set_defaults(func=cmd_browse)
+
+    p_open = sub.add_parser(
+        "open", parents=[common, launch_opts],
+        help="Open one session in a new terminal (claude --resume)",
+    )
+    p_open.add_argument("session_id", help="Full or short session id")
+    p_open.add_argument("--dry-run", action="store_true",
+                        help="Print the launch command instead of running it")
+    p_open.set_defaults(func=cmd_open)
+
     p_mem = sub.add_parser("memory", parents=[common], help="List CLAUDE.md memory")
     p_mem.set_defaults(func=cmd_memory)
 
@@ -201,7 +281,7 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     # Default to the overview command when none is given.
-    known = {"overview", "sessions", "show", "memory"}
+    known = {"overview", "sessions", "show", "memory", "browse", "open"}
     if not argv or (argv[0] not in known and argv[0] not in ("-h", "--help", "--version")):
         argv = ["overview"] + argv
     args = parser.parse_args(argv)
