@@ -232,6 +232,111 @@ def test_console_render_has_numbers_and_buttons():
     assert "Prev" in text and "Next" in text and "Quit" in text
 
 
+def test_carousel_step_index_wraps():
+    from claude_manager.carousel import step_index
+
+    assert step_index(0, 1, 4) == 1
+    assert step_index(3, 1, 4) == 0      # wrap forward off the end
+    assert step_index(0, -1, 4) == 3     # wrap backward off the start
+    assert step_index(0, 1, 0) == 0      # empty is safe
+
+
+def test_carousel_wrap_text_pads_and_truncates():
+    from claude_manager.carousel import wrap_text
+
+    out = wrap_text("hello world", 20, 3)
+    assert len(out) == 3
+    assert out[0] == "hello world" and out[1] == "" and out[2] == ""
+    long = wrap_text("one two three four five six seven eight nine ten", 10, 2)
+    assert len(long) == 2
+    assert any("…" in ln for ln in long)  # overflow is marked
+
+
+def test_carousel_card_shows_summary_age_tokens():
+    from claude_manager.core import Session, TokenUsage
+    from claude_manager.carousel import card_lines
+    from datetime import datetime, timezone
+
+    s = Session(session_id="abc-1", path=Path("/tmp/a.jsonl"),
+                project_path="/p/proj", title="Backup my zsh config",
+                last_ts=datetime(2026, 6, 21, tzinfo=timezone.utc),
+                usage=TokenUsage(input=1_000_000, output=300_000))
+    text = "\n".join(card_lines(s, 40))
+    assert "Backup my zsh config" in text
+    assert "last" in text
+    assert "tokens" in text
+    assert "1.3M" in text  # token total, humanised
+
+
+def test_card_prefers_summary_over_title():
+    from claude_manager.core import Session
+    from claude_manager.carousel import card_lines
+
+    s = Session(session_id="x", path=Path("/tmp/x.jsonl"),
+                title="raw first prompt that is long", summary="Tidy summary")
+    text = "\n".join(card_lines(s, 40))
+    assert "Tidy summary" in text
+    assert "raw first prompt" not in text
+
+
+def test_summary_cache_roundtrip_and_fingerprint(tmp_path):
+    from claude_manager.core import Session
+    from claude_manager.summarize import SummaryCache
+    from datetime import datetime, timezone
+
+    s = Session(session_id="sess-1", path=tmp_path / "s.jsonl",
+                message_count=4,
+                last_ts=datetime(2026, 6, 21, tzinfo=timezone.utc))
+    cache = SummaryCache(path=tmp_path / "summaries.json")
+    assert cache.get(s) is None
+    cache.set(s, "A neat summary")
+    cache.save()
+
+    reloaded = SummaryCache(path=tmp_path / "summaries.json")
+    assert reloaded.get(s) == "A neat summary"
+    assert reloaded.apply([s]) == 1 and s.summary == "A neat summary"
+
+    # Changing the session content invalidates the cached summary.
+    s.message_count = 5
+    assert reloaded.get(s) is None
+
+
+def test_resolve_model_precedence(monkeypatch):
+    from claude_manager.summarize import resolve_model
+
+    monkeypatch.delenv("CLAUDE_MANAGER_SUMMARY_MODEL", raising=False)
+    monkeypatch.delenv("ANTHROPIC_SMALL_FAST_MODEL", raising=False)
+    assert resolve_model() == "haiku"                       # default
+
+    monkeypatch.setenv("ANTHROPIC_SMALL_FAST_MODEL", "azure-haiku-deploy")
+    assert resolve_model() == "azure-haiku-deploy"          # Claude Code's small model
+
+    monkeypatch.setenv("CLAUDE_MANAGER_SUMMARY_MODEL", "my-pick")
+    assert resolve_model() == "my-pick"                     # our env wins over it
+
+    assert resolve_model("explicit") == "explicit"          # explicit arg wins over all
+
+
+def test_summary_prompt_and_excerpt(tmp_path):
+    from claude_manager.core import read_transcript_text
+    from claude_manager.summarize import build_prompt
+
+    path = tmp_path / "t.jsonl"
+    _write_jsonl(path, [
+        {"type": "user", "message": {"role": "user", "content": "Fix the auth bug"}},
+        {"type": "assistant",
+         "message": {"role": "assistant", "content": [
+             {"type": "text", "text": "Sure, looking now"}]}},
+        {"type": "queue-operation"},
+    ])
+    excerpt = read_transcript_text(path)
+    assert "user: Fix the auth bug" in excerpt
+    assert "assistant: Sure, looking now" in excerpt
+    assert "queue-operation" not in excerpt
+    prompt = build_prompt(excerpt)
+    assert "single concise phrase" in prompt and "Fix the auth bug" in prompt
+
+
 if __name__ == "__main__":
     import pytest
 

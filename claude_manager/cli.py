@@ -188,6 +188,68 @@ def cmd_open(args) -> int:
     return 0
 
 
+def cmd_carousel(args) -> int:
+    from claude_manager.carousel import carousel
+    from claude_manager.summarize import SummaryCache
+
+    home = Path(args.home).expanduser() if args.home else default_home()
+    sessions = _filter_sessions(discover_sessions(home), args.project)
+    if not sessions:
+        print("No sessions found.", file=sys.stderr)
+        return 1
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        print("The carousel needs an interactive terminal (a TTY).",
+              file=sys.stderr)
+        return 1
+    cache = SummaryCache()
+    cache.apply(sessions)  # show any summaries already generated
+    try:
+        carousel(sessions, terminal=args.terminal, claude_bin=args.claude_bin,
+                 cache=cache, summary_model=args.model)
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+def cmd_summarize(args) -> int:
+    from claude_manager.summarize import (
+        SummaryCache,
+        SummaryError,
+        resolve_model,
+        summarize_session,
+    )
+
+    home = Path(args.home).expanduser() if args.home else default_home()
+    sessions = _filter_sessions(discover_sessions(home), args.project)
+    if not sessions:
+        print("No sessions found.", file=sys.stderr)
+        return 1
+    cache = SummaryCache()
+    model = resolve_model(args.model)
+    todo = [s for s in sessions if args.force or cache.get(s) is None]
+    if not todo:
+        print(f"All {len(sessions)} sessions already summarised (cache: {cache.path}).")
+        return 0
+    print(f"Summarising {len(todo)} session(s) with model '{model}'…")
+    failures = 0
+    for i, s in enumerate(todo, 1):
+        label = f"[{i}/{len(todo)}] {s.short_id} {s.project_name}"
+        try:
+            summary = summarize_session(s, model=args.model,
+                                        claude_bin=args.claude_bin)
+        except SummaryError as exc:
+            failures += 1
+            print(f"  {label}: failed ({exc})", file=sys.stderr)
+            continue
+        s.summary = summary
+        cache.set(s, summary)
+        cache.save()  # save incrementally so progress isn't lost
+        print(f"  {label}: {summary}")
+    done = len(todo) - failures
+    print(f"Done — {done} summarised, {failures} failed. Cache: {cache.path}")
+    return 0 if failures == 0 else 1
+
+
 def cmd_console(args) -> int:
     from claude_manager.console import SessionConsole
 
@@ -270,9 +332,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command")
 
+    p_car = sub.add_parser(
+        "carousel", parents=[common, launch_opts],
+        help="Interactive card carousel — arrow keys to flip, Enter to resume",
+    )
+    p_car.add_argument("--model", help="Model for on-demand summaries (default: haiku)")
+    p_car.set_defaults(func=cmd_carousel)
+
+    p_sum = sub.add_parser(
+        "summarize", parents=[common, launch_opts],
+        help="Generate one-line session summaries with Claude and cache them",
+    )
+    p_sum.add_argument("--model", help="Model to summarise with (default: haiku)")
+    p_sum.add_argument("--force", action="store_true",
+                       help="Re-summarise even if a cached summary exists")
+    p_sum.set_defaults(func=cmd_summarize)
+
     p_con = sub.add_parser(
         "console", parents=[common, launch_opts],
-        help="Interactive numbered console — type a # to resume, n/p to page",
+        help="Numbered console — type a # to resume, n/p to page (classic)",
     )
     p_con.add_argument("--page-size", type=int, default=10,
                        help="Sessions per page (default: 10)")
@@ -315,11 +393,12 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     # Default to the overview command when none is given.
-    known = {"overview", "sessions", "show", "memory", "browse", "open", "console"}
+    known = {"overview", "sessions", "show", "memory", "browse", "open",
+             "console", "carousel", "summarize"}
     if not argv:
-        # Bare invocation: drop into the interactive console on a TTY,
+        # Bare invocation: drop into the interactive carousel on a TTY,
         # otherwise print the static overview (e.g. when piped).
-        argv = ["console"] if sys.stdin.isatty() and sys.stdout.isatty() \
+        argv = ["carousel"] if sys.stdin.isatty() and sys.stdout.isatty() \
             else ["overview"]
     elif argv[0] not in known and argv[0] not in ("-h", "--help", "--version"):
         argv = ["overview"] + argv
