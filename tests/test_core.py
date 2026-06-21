@@ -232,6 +232,42 @@ def test_console_render_has_numbers_and_buttons():
     assert "Prev" in text and "Next" in text and "Quit" in text
 
 
+def test_carousel_step_index_wraps():
+    from claude_manager.carousel import step_index
+
+    assert step_index(0, 1, 4) == 1
+    assert step_index(3, 1, 4) == 0      # wrap forward off the end
+    assert step_index(0, -1, 4) == 3     # wrap backward off the start
+    assert step_index(0, 1, 0) == 0      # empty is safe
+
+
+def test_carousel_wrap_text_pads_and_truncates():
+    from claude_manager.carousel import wrap_text
+
+    out = wrap_text("hello world", 20, 3)
+    assert len(out) == 3
+    assert out[0] == "hello world" and out[1] == "" and out[2] == ""
+    long = wrap_text("one two three four five six seven eight nine ten", 10, 2)
+    assert len(long) == 2
+    assert any("…" in ln for ln in long)  # overflow is marked
+
+
+def test_carousel_card_shows_summary_age_tokens():
+    from claude_manager.core import Session, TokenUsage
+    from claude_manager.carousel import card_lines
+    from datetime import datetime, timezone
+
+    s = Session(session_id="abc-1", path=Path("/tmp/a.jsonl"),
+                project_path="/p/proj", title="Backup my zsh config",
+                last_ts=datetime(2026, 6, 21, tzinfo=timezone.utc),
+                usage=TokenUsage(input=1_000_000, output=300_000))
+    text = "\n".join(card_lines(s, 40))
+    assert "Backup my zsh config" in text
+    assert "last accessed" in text
+    assert "tokens" in text
+    assert "1.3M" in text  # token total, humanised
+
+
 if __name__ == "__main__":
     import pytest
 

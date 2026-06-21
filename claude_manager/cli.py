@@ -188,6 +188,25 @@ def cmd_open(args) -> int:
     return 0
 
 
+def cmd_carousel(args) -> int:
+    from claude_manager.carousel import carousel
+
+    home = Path(args.home).expanduser() if args.home else default_home()
+    sessions = _filter_sessions(discover_sessions(home), args.project)
+    if not sessions:
+        print("No sessions found.", file=sys.stderr)
+        return 1
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        print("The carousel needs an interactive terminal (a TTY).",
+              file=sys.stderr)
+        return 1
+    try:
+        carousel(sessions, terminal=args.terminal, claude_bin=args.claude_bin)
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
 def cmd_console(args) -> int:
     from claude_manager.console import SessionConsole
 
@@ -270,9 +289,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command")
 
+    p_car = sub.add_parser(
+        "carousel", parents=[common, launch_opts],
+        help="Interactive card carousel — arrow keys to flip, Enter to resume",
+    )
+    p_car.set_defaults(func=cmd_carousel)
+
     p_con = sub.add_parser(
         "console", parents=[common, launch_opts],
-        help="Interactive numbered console — type a # to resume, n/p to page",
+        help="Numbered console — type a # to resume, n/p to page (classic)",
     )
     p_con.add_argument("--page-size", type=int, default=10,
                        help="Sessions per page (default: 10)")
@@ -315,11 +340,12 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     # Default to the overview command when none is given.
-    known = {"overview", "sessions", "show", "memory", "browse", "open", "console"}
+    known = {"overview", "sessions", "show", "memory", "browse", "open",
+             "console", "carousel"}
     if not argv:
-        # Bare invocation: drop into the interactive console on a TTY,
+        # Bare invocation: drop into the interactive carousel on a TTY,
         # otherwise print the static overview (e.g. when piped).
-        argv = ["console"] if sys.stdin.isatty() and sys.stdout.isatty() \
+        argv = ["carousel"] if sys.stdin.isatty() and sys.stdout.isatty() \
             else ["overview"]
     elif argv[0] not in known and argv[0] not in ("-h", "--help", "--version"):
         argv = ["overview"] + argv

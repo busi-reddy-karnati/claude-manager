@@ -66,37 +66,47 @@ MEMORY
 * `AGE` is the time since the last activity in that session.
 * `TOKENS` is the cumulative token usage (input + output + cache) for the session.
 
-## Interactive console (numbered, paginated)
+## Interactive carousel
 
 Running `claude-manager` with no arguments (in a terminal) drops you into the
-**interactive console** — a numbered, colourful, paginated list of your latest
-sessions:
+**carousel** — one session per card, flip through them with a single key press:
 
 ```
-  Claude Code Manager — sessions
-  47 sessions · 1 live · page 1/5
+  Claude Code Manager
+  session 2 of 12  ·  1 live
 
-  [ 1] ● 0s    claude-manager     main             dfe79c6e  213   7.5M  Build a session manager…
-  [ 2]   3h    my-api             feat/login       a1b2c3d4   24   120k  Fix the failing auth test
-  [ 3]   2d    notes              -                99887766    8    12k  Summarise meeting notes
-  …
+              ╭──────────────────────────────────────────────╮
+              │ Fitnesswispr                                  │
+              │                                               │
+              │ I along with a lot of gym goers need to       │
+              │ reconsider their workout plans…               │
+              │                                               │
+              │ last accessed   38s ago                       │
+              │                 2026-06-21 00:07              │
+              │ tokens          389.3M                        │
+              ╰──────────────────────────────────────────────╯
 
-   ◀ Prev (p)    Next (n) ▶     Quit (q)
-  Enter # to resume · n/p to navigate · q to quit ›
+                              · ● · · · · · · · · · ·
+        ←/→  a/d  h/l  n/p   move      ⏎ / space   resume      q   quit
 ```
 
-* **Type a number** → opens that session in your terminal, resuming it
-  (`claude --resume <id>`). Numbering is global, so you can type any number.
-* **`n` / `p`** → Next / Previous page.
+Each card keeps it simple: a **summary** of what the session was about, **when
+you last accessed it**, and its **token** usage.
+
+* **← / →** (or `a`/`d`, `h`/`l`, `n`/`p`) → flip to the previous / next session.
+  No Enter required — it moves on the key press, with a quick slide animation.
+* **Enter / Space** → resume the focused session in your default terminal
+  (`claude --resume <id>`).
+* **Home / End** → jump to the first / last session.
 * **`q`** → quit.
 
 ```bash
-claude-manager console               # same thing, explicitly
-claude-manager console --page-size 20
+claude-manager carousel              # same thing, explicitly
 ```
 
-There's also a mouse-driven curses view — `claude-manager browse` — where you
-**click a row** (or press Enter) to open it.
+Prefer a different style? `claude-manager console` is a numbered, paginated list
+(type a number to resume), and `claude-manager browse` is a mouse-clickable
+table.
 
 ## Open in your default terminal
 
