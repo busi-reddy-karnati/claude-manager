@@ -352,7 +352,25 @@ def test_summary_prompt_and_excerpt(tmp_path):
     assert "assistant: Sure, looking now" in excerpt
     assert "queue-operation" not in excerpt
     prompt = build_prompt(excerpt)
-    assert "single concise phrase" in prompt and "Fix the auth bug" in prompt
+    assert "overall goal" in prompt and "Fix the auth bug" in prompt
+
+
+def test_transcript_samples_head_and_tail(tmp_path):
+    from claude_manager.core import read_transcript_text
+
+    rows = [{"type": "user", "message": {"role": "user", "content": "GOAL: ship feature X"}}]
+    for k in range(60):
+        rows.append({"type": "assistant",
+                     "message": {"role": "assistant", "content": f"middle step {k} " * 40}})
+    rows.append({"type": "user", "message": {"role": "user", "content": "FINAL: ship it now"}})
+    path = tmp_path / "big.jsonl"
+    _write_jsonl(path, rows)
+
+    excerpt = read_transcript_text(path, max_chars=1500)
+    assert len(excerpt) <= 1700  # budget respected (+ omission marker)
+    assert "GOAL: ship feature X" in excerpt   # head (the goal) kept
+    assert "FINAL: ship it now" in excerpt      # tail (latest state) kept
+    assert "omitted" in excerpt                 # middle dropped
 
 
 if __name__ == "__main__":

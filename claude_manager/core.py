@@ -239,15 +239,17 @@ def parse_session(path: Path) -> Session:
 
 
 def read_transcript_text(
-    path: Path, max_chars: int = 4000, max_messages: int = 24
+    path: Path, max_chars: int = 6000, per_message_chars: int = 600
 ) -> str:
-    """Return a compact text excerpt of a session transcript for summarising.
+    """Return a representative text excerpt of a session for summarising.
 
-    Concatenates the user/assistant message text (role-prefixed), stopping once
-    ``max_chars`` or ``max_messages`` is reached.
+    Reads the whole transcript (each message capped at ``per_message_chars`` so
+    one long message can't dominate) and, if it exceeds ``max_chars``, samples
+    from the **head and the tail** — the opening usually states the goal, the
+    tail shows where the work actually went — dropping the middle. This gives a
+    summary of the whole conversation rather than just the first prompt.
     """
-    parts: list[str] = []
-    total = 0
+    messages: list[str] = []
     for obj in _iter_jsonl(path):
         if obj.get("type") not in _MESSAGE_TYPES:
             continue
@@ -257,12 +259,32 @@ def read_transcript_text(
         text = _text_from_content(message.get("content")).strip()
         if not text:
             continue
-        chunk = f"{obj['type']}: {text}"
-        parts.append(chunk)
-        total += len(chunk)
-        if total >= max_chars or len(parts) >= max_messages:
-            break
-    return "\n".join(parts)[:max_chars]
+        messages.append(f"{obj['type']}: {text[:per_message_chars]}")
+
+    if not messages:
+        return ""
+    joined = "\n".join(messages)
+    if len(joined) <= max_chars:
+        return joined
+
+    head_budget = max_chars * 2 // 3
+    tail_budget = max_chars - head_budget
+
+    def _take(seq, budget):
+        out, used = [], 0
+        for m in seq:
+            if used + len(m) + 1 > budget:
+                break
+            out.append(m)
+            used += len(m) + 1
+        return out
+
+    head = _take(messages, head_budget)
+    tail = _take(reversed(messages), tail_budget)
+    tail.reverse()
+    # Avoid overlap when head and tail meet in the middle.
+    tail = [m for m in tail if m not in head]
+    return "\n".join(head + ["… (middle of the conversation omitted) …"] + tail)
 
 
 def _load_live_sessions(home: Path) -> dict[str, dict]:
