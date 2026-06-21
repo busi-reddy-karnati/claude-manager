@@ -23,7 +23,10 @@ from pathlib import Path
 from claude_manager.core import Session, read_transcript_text
 
 DEFAULT_MODEL = "haiku"
-_MAX_SUMMARY_CHARS = 80
+_MAX_SUMMARY_CHARS = 96
+# Bump when the prompt or excerpt strategy changes, so cached summaries that
+# were generated the old way are treated as stale and regenerated.
+SUMMARY_VERSION = 2
 
 
 class SummaryError(RuntimeError):
@@ -72,7 +75,11 @@ class SummaryCache:
 
     def get(self, session: Session) -> str | None:
         entry = self.data.get(session.session_id)
-        if entry and entry.get("fingerprint") == session.fingerprint:
+        if (
+            entry
+            and entry.get("fingerprint") == session.fingerprint
+            and entry.get("v") == SUMMARY_VERSION
+        ):
             return entry.get("summary") or None
         return None
 
@@ -80,6 +87,7 @@ class SummaryCache:
         self.data[session.session_id] = {
             "summary": summary,
             "fingerprint": session.fingerprint,
+            "v": SUMMARY_VERSION,
         }
 
     def save(self) -> None:
@@ -102,10 +110,14 @@ class SummaryCache:
 
 def build_prompt(excerpt: str) -> str:
     return (
-        "Summarise what this Claude Code session is about in a single concise "
-        "phrase of at most 8 words. It should read like a title. Use no quotes "
-        "and no trailing punctuation. Reply with only the phrase.\n\n"
-        "Transcript:\n" + excerpt
+        "Below is an excerpt from a Claude Code session (it may include the start "
+        "and end of the conversation, with the middle omitted). Summarise the "
+        "session's overall goal — what the user is ultimately trying to "
+        "accomplish across the whole conversation, not just the first or last "
+        "message. Reply with a single concise sentence of at most 14 words, "
+        "phrased like a task description. Use no quotes and no trailing "
+        "punctuation. Reply with only the summary.\n\n"
+        "Conversation excerpt:\n" + excerpt
     )
 
 

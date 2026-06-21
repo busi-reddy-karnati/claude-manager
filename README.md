@@ -144,10 +144,13 @@ carousel never blocks waiting for them.
 
 ### AI summaries
 
-Instead of the raw first prompt, each card shows a one-line **summary of what the
-session was actually about**. claude-manager generates these by reusing the
-`claude` CLI you already have (no API key needed), in non-interactive mode with a
-small, fast model. The model is chosen in this order:
+Instead of the raw first prompt, each card shows a one-line **summary of the
+session's overall goal** — what you were ultimately trying to accomplish. To get
+that (rather than just echoing the opening message), claude-manager feeds the
+model a sample from across the whole conversation — the beginning, where the goal
+is usually stated, and the most recent messages, where the work actually went. It
+generates these by reusing the `claude` CLI you already have (no API key needed),
+in non-interactive mode with a small, fast model. The model is chosen in this order:
 `--model` → `CLAUDE_MANAGER_SUMMARY_MODEL` → `ANTHROPIC_SMALL_FAST_MODEL` (the
 small model your Claude Code is already configured with) → the `haiku` alias —
 so it works out of the box on managed backends like Bedrock, Vertex, or Azure
