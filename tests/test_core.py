@@ -301,6 +301,22 @@ def test_summary_cache_roundtrip_and_fingerprint(tmp_path):
     assert reloaded.get(s) is None
 
 
+def test_resolve_model_precedence(monkeypatch):
+    from claude_manager.summarize import resolve_model
+
+    monkeypatch.delenv("CLAUDE_MANAGER_SUMMARY_MODEL", raising=False)
+    monkeypatch.delenv("ANTHROPIC_SMALL_FAST_MODEL", raising=False)
+    assert resolve_model() == "haiku"                       # default
+
+    monkeypatch.setenv("ANTHROPIC_SMALL_FAST_MODEL", "azure-haiku-deploy")
+    assert resolve_model() == "azure-haiku-deploy"          # Claude Code's small model
+
+    monkeypatch.setenv("CLAUDE_MANAGER_SUMMARY_MODEL", "my-pick")
+    assert resolve_model() == "my-pick"                     # our env wins over it
+
+    assert resolve_model("explicit") == "explicit"          # explicit arg wins over all
+
+
 def test_summary_prompt_and_excerpt(tmp_path):
     from claude_manager.core import read_transcript_text
     from claude_manager.summarize import build_prompt

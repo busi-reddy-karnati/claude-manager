@@ -31,7 +31,22 @@ class SummaryError(RuntimeError):
 
 
 def resolve_model(model: str | None = None) -> str:
-    return model or os.environ.get("CLAUDE_MANAGER_SUMMARY_MODEL") or DEFAULT_MODEL
+    """Pick the model for summaries.
+
+    Order of preference:
+      1. an explicit ``model`` argument (e.g. ``--model``),
+      2. ``CLAUDE_MANAGER_SUMMARY_MODEL``,
+      3. ``ANTHROPIC_SMALL_FAST_MODEL`` — the small/fast model your Claude Code
+         is already configured with, so summaries work out of the box on managed
+         backends (Bedrock, Vertex, Azure Foundry) without extra setup,
+      4. the ``haiku`` alias.
+    """
+    return (
+        model
+        or os.environ.get("CLAUDE_MANAGER_SUMMARY_MODEL")
+        or os.environ.get("ANTHROPIC_SMALL_FAST_MODEL")
+        or DEFAULT_MODEL
+    )
 
 
 def cache_path() -> Path:

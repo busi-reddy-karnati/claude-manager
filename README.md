@@ -111,7 +111,11 @@ claude-manager carousel              # same thing, explicitly
 By default a card shows the session's first prompt. For a cleaner one-line
 **summary of what the session was actually about**, claude-manager asks Claude —
 reusing the `claude` CLI you already have (no API key needed), in non-interactive
-mode with a fast model (Haiku):
+mode with a small, fast model. The model is chosen in this order:
+`--model` → `CLAUDE_MANAGER_SUMMARY_MODEL` → `ANTHROPIC_SMALL_FAST_MODEL` (the
+small model your Claude Code is already configured with) → the `haiku` alias —
+so it works out of the box on managed backends like Bedrock, Vertex, or Azure
+Foundry without extra setup.
 
 ```bash
 claude-manager summarize             # summarise all sessions, cache the results
@@ -154,19 +158,15 @@ then `claude-manager summarize` will work as-is.
 2. **If only the `--model haiku` part errors** (e.g. "model not found"), your
    backend doesn't recognise the `haiku` alias. This is common on
    Bedrock / Vertex / Azure Foundry, where models are addressed by a provider
-   model id or a **deployment name**. Point claude-manager at the right one:
+   model id or a **deployment name**. If your Claude Code already sets
+   `ANTHROPIC_SMALL_FAST_MODEL` (managed backends usually do), claude-manager
+   picks it up automatically — nothing to do. Otherwise point it at the right
+   model explicitly:
 
    ```bash
    export CLAUDE_MANAGER_SUMMARY_MODEL="<your-model-id-or-deployment-name>"
    # or per-run:
    claude-manager summarize --model "<your-model-id-or-deployment-name>"
-   ```
-
-   Tip: use the same small/fast model your Claude Code is already set up with —
-   on a managed backend that's usually the value of `ANTHROPIC_SMALL_FAST_MODEL`:
-
-   ```bash
-   claude-manager summarize --model "$ANTHROPIC_SMALL_FAST_MODEL"
    ```
 
 3. **Confirm.** Re-run the check with your model, then summarise one session:
