@@ -1,40 +1,45 @@
-"""A carousel of session cards, navigated with single key presses.
+"""A compact, inline session carousel.
 
-One session is shown as a large centered card, with its neighbours peeking in
-from the sides. Flip between them with the arrow keys (or a/d, h/l, n/p) — no
-Enter needed — and press Enter/Space to resume the focused session in your
-default terminal. ``q`` quits.
+Unlike a full-screen TUI, this draws only a small fixed-height block where the
+cursor already is (think ``fzf --height``) and updates it in place — so it stays
+small and elegant and never blanks the whole terminal.
 
-Each card is deliberately minimal:
+Navigate with single key presses (no Enter): ← / → (also a/d, h/l, n/p) flip
+between sessions, Enter/Space resumes the focused one, ``s`` re-summarises it,
+``q`` quits.
 
-  1. a one-line summary of what the session is about,
-  2. when it was last accessed,
-  3. how many tokens it used.
+Summaries are generated in the background: cards render immediately with any
+summary that already exists (from the on-disk cache) and the rest fill in as the
+worker finishes them. A generated summary is cached keyed by the session's
+content fingerprint, so an unchanged session is never summarised twice.
 
 The pure helpers (:func:`step_index`, :func:`wrap_text`, :func:`card_lines`) are
-unit-tested; :class:`Carousel` wraps them in a curses loop with a short slide
-animation between cards.
+unit-tested; :class:`InlineCarousel` wraps them in a tiny raw-mode input loop.
 """
 
 from __future__ import annotations
 
-import curses
+import os
+import select
+import sys
+import threading
 from datetime import datetime, timezone
 
 from claude_manager.core import Session
 from claude_manager.launch import LaunchError, launch_session, resolve_terminal
-from claude_manager.render import human_age, human_count, human_dt
+from claude_manager.render import Painter, human_age, human_count, human_dt
 
-# Navigation key sets (single press, no Enter).
-_PREV_KEYS = {curses.KEY_LEFT, ord("a"), ord("h"), ord("p"), ord("A"), ord("H"),
-              ord("P")}
-_NEXT_KEYS = {curses.KEY_RIGHT, ord("d"), ord("l"), ord("n"), ord("D"), ord("L"),
-              ord("N")}
-_OPEN_KEYS = {curses.KEY_ENTER, 10, 13, ord(" "), ord("o"), ord("O")}
-_QUIT_KEYS = {ord("q"), ord("Q"), 27}
+try:  # POSIX only; carousel() reports a friendly error if missing.
+    import termios
+    import tty
+    _HAVE_TERMIOS = True
+except ImportError:  # pragma: no cover - non-POSIX
+    _HAVE_TERMIOS = False
 
-_ANIM_FRAMES = 5
-_ANIM_DELAY_MS = 14
+CARD_INNER_LINES = 5      # header + 2 summary + time + tokens
+CARD_HEIGHT = CARD_INNER_LINES + 2   # + top/bottom border
+GAP = 3                   # columns between cards
+_POLL_SECONDS = 0.15
 
 
 def step_index(index: int, delta: int, count: int) -> int:
@@ -56,7 +61,7 @@ def wrap_text(text: str, width: int, max_lines: int) -> list[str]:
         if len(candidate) <= width:
             cur = candidate
         else:
-            if cur:  # don't emit a blank line for an over-long single word
+            if cur:
                 lines.append(cur)
             cur = w
             if len(lines) >= max_lines:
@@ -65,7 +70,6 @@ def wrap_text(text: str, width: int, max_lines: int) -> list[str]:
     if not truncated:
         if cur:
             lines.append(cur)
-        # A single word longer than the whole box still overflows.
         truncated = len(lines) > max_lines or (
             bool(words) and any(len(ln) > width for ln in lines)
         )
@@ -81,267 +85,287 @@ def wrap_text(text: str, width: int, max_lines: int) -> list[str]:
 
 
 def card_lines(session: Session, inner_width: int, now: datetime | None = None) -> list[str]:
-    """Build the plain-text inner lines of a session card (no colour, no border).
-
-    Layout: project · summary (3 lines) · last accessed · tokens.
-    """
+    """Plain-text inner lines of a card: project, summary (2 lines), when, tokens."""
     now = now or datetime.now(timezone.utc)
-    iw = max(10, inner_width)
-    summary = wrap_text(session.display_summary or "(no prompt)", iw, 3)
+    iw = max(8, inner_width)
+    summary = wrap_text(session.display_summary or "(no prompt)", iw, 2)
     age = human_age(session.last_ts, now)
-    when = human_dt(session.last_ts)
     header = (("● " if session.is_live else "") + session.project_name)[:iw]
-    lines = [
+    return [
         header,
-        "",
         summary[0],
         summary[1],
-        summary[2],
-        "",
-        f"last  {age} ago · {when}"[:iw],
-        f"tokens  {human_count(session.usage.total)}"[:iw],
+        f"{age} ago · {human_dt(session.last_ts)}"[:iw],
+        f"{human_count(session.usage.total)} tokens"[:iw],
     ]
-    return lines
 
 
-class Carousel:
-    CARD_MIN_W = 22
-    CARD_MAX_W = 40
-
+class InlineCarousel:
     def __init__(self, sessions: list[Session], *, terminal: str | None = None,
-                 claude_bin: str | None = None, cache=None, summary_model=None):
+                 claude_bin: str | None = None, cache=None,
+                 summary_model: str | None = None, color: bool | None = None):
         self.sessions = sessions
         self.terminal = terminal
         self.claude_bin = claude_bin
-        self.cache = cache              # optional SummaryCache
+        self.cache = cache
         self.summary_model = summary_model
+        if color is None:
+            color = sys.stdout.isatty()
+        self.paint = Painter(color)
         self.index = 0
         self.status = ""
-        self._colors: dict[str, int] = {}
-
-    # -- colour ----------------------------------------------------------
-    def _color(self, name: str) -> int:
-        return self._colors.get(name, 0)
-
-    def _init_colors(self) -> None:
-        if not curses.has_colors():
-            return
-        curses.start_color()
-        try:
-            curses.use_default_colors()
-            bg = -1
-        except curses.error:
-            bg = curses.COLOR_BLACK
-        palette = {
-            "cyan": curses.COLOR_CYAN,
-            "green": curses.COLOR_GREEN,
-            "yellow": curses.COLOR_YELLOW,
-            "magenta": curses.COLOR_MAGENTA,
-            "blue": curses.COLOR_BLUE,
-            "white": curses.COLOR_WHITE,
-        }
-        for i, (name, fg) in enumerate(palette.items(), start=1):
-            try:
-                curses.init_pair(i, fg, bg)
-                self._colors[name] = curses.color_pair(i)
-            except curses.error:
-                pass
+        self._rendered = False
+        self._height = 0
+        self._stop = threading.Event()
+        self._dirty = threading.Event()
+        self._thread: threading.Thread | None = None
 
     # -- geometry --------------------------------------------------------
-    def _card_width(self, maxx: int) -> int:
-        # Aim for ~3 cards across so several are visible at once.
-        width = (maxx - 16) // 3
-        return max(self.CARD_MIN_W, min(self.CARD_MAX_W, width))
+    def _card_width(self, cols: int) -> int:
+        return max(26, min(38, (cols - 12) // 3))
 
-    def _card_rows(self, session: Session, focused: bool, width: int,
-                   now: datetime):
-        """Return a list of (text, attr) rows for one card, each ``width`` wide."""
+    def _visible(self, cols: int, width: int) -> int:
+        n = len(self.sessions)
+        if n >= 3 and cols >= 3 * width + 2 * GAP + 2:
+            return 3
+        return 1
+
+    # -- card rendering --------------------------------------------------
+    def _card(self, session: Session, focused: bool, width: int,
+              now: datetime) -> list[str]:
         iw = width - 4
         inner = card_lines(session, iw, now)
+        p = self.paint
         if focused:
-            border = self._color("green") | curses.A_BOLD if session.is_live \
-                else self._color("cyan") | curses.A_BOLD
-            line_attrs = [
-                (self._color("green") | curses.A_BOLD) if session.is_live
-                else (self._color("cyan") | curses.A_BOLD),  # project header
-                0,
-                curses.A_BOLD, curses.A_BOLD, curses.A_BOLD,  # summary (3 lines)
-                0,
-                self._color("yellow"),                         # last accessed
-                self._color("green") | curses.A_BOLD,          # tokens
-            ]
+            accent = "green" if session.is_live else "cyan"
+            attrs = [(accent, "bold"), ("bold",), ("bold",), ("dim",),
+                     ("green",)]
+            border = (accent, "bold")
         else:
-            border = curses.A_DIM
-            line_attrs = [curses.A_DIM] * len(inner)
-
-        rows = [("╭" + "─" * (width - 2) + "╮", border)]
-        for text, attr in zip(inner, line_attrs):
-            body = "│ " + text.ljust(iw) + " │"
-            rows.append((body, attr if focused else curses.A_DIM))
-        rows.append(("╰" + "─" * (width - 2) + "╯", border))
+            attrs = [("dim",)] * CARD_INNER_LINES
+            border = ("dim",)
+        rows = [p("╭" + "─" * (width - 2) + "╮", *border)]
+        for text, attr in zip(inner, attrs):
+            rows.append(p("│ " + text.ljust(iw) + " │", *attr))
+        rows.append(p("╰" + "─" * (width - 2) + "╯", *border))
         return rows
 
-    # -- drawing ---------------------------------------------------------
-    def _put(self, stdscr, y: int, x: int, text: str, attr: int, maxx: int,
-             maxy: int) -> None:
-        if y < 0 or y >= maxy or not text:
-            return
-        if x < 0:  # clip the left side (for cards peeking off-screen)
-            text = text[-x:]
-            x = 0
-        if x >= maxx:
-            return
-        text = text[: maxx - x]
-        if not text:
-            return
-        try:
-            stdscr.addstr(y, x, text, attr)
-        except curses.error:
-            pass  # writing the bottom-right cell raises; ignore.
-
-    def _render(self, stdscr, scroll: float) -> None:
-        stdscr.erase()
-        maxy, maxx = stdscr.getmaxyx()
-        now = datetime.now(timezone.utc)
+    # -- frame -----------------------------------------------------------
+    def _frame(self, cols: int) -> list[str]:
         n = len(self.sessions)
-        focus = int(round(scroll)) % n if n else 0
-
-        # Header.
-        live = sum(1 for s in self.sessions if s.is_live)
-        self._put(stdscr, 0, 2, "Claude Code Manager", curses.A_BOLD
-                  | self._color("cyan"), maxx, maxy)
-        sub = f"session {focus + 1} of {n}  ·  {live} live"
-        self._put(stdscr, 1, 2, sub, curses.A_DIM, maxx, maxy)
-
-        # Filmstrip of cards.
-        width = self._card_width(maxx)
-        step = width + 4
-        sample = self._card_rows(self.sessions[0], True, width, now)
-        card_h = len(sample)
-        top = max(3, (maxy - card_h) // 2 - 1)
-        center = maxx // 2
-        for i, session in enumerate(self.sessions):
-            x = center + int(round((i - scroll) * step)) - width // 2
-            if x + width < 0 or x > maxx:
-                continue
-            focused = (i == focus)
-            rows = self._card_rows(session, focused, width, now)
-            for r, (text, attr) in enumerate(rows):
-                y = top + r
-                if y >= maxy - 3:  # leave room for the footer
-                    break
-                self._put(stdscr, y, x, text, attr, maxx, maxy)
-
-        self._draw_footer(stdscr, maxx, maxy, focus, n)
-        stdscr.refresh()
-
-    def _draw_footer(self, stdscr, maxx: int, maxy: int, focus: int, n: int) -> None:
-        # Position indicator: dots for small N, "i / n" otherwise.
-        if n <= 12:
-            dots = " ".join("●" if i == focus else "·" for i in range(n))
+        i = self.index
+        width = self._card_width(cols)
+        visible = self._visible(cols, width)
+        if visible == 3:
+            idxs = [(i - 1) % n, i, (i + 1) % n]
+            focus_pos = 1
         else:
-            dots = f"‹ {focus + 1} / {n} ›"
-        self._put(stdscr, maxy - 3, max(2, (maxx - len(dots)) // 2), dots,
-                  self._color("cyan"), maxx, maxy)
+            idxs = [i]
+            focus_pos = 0
+        now = datetime.now(timezone.utc)
+        cards = [self._card(self.sessions[k], pos == focus_pos, width, now)
+                 for pos, k in enumerate(idxs)]
+        strip_w = len(idxs) * width + (len(idxs) - 1) * GAP
+        pad = " " * max(0, (cols - strip_w) // 2)
+        strip = [pad + (" " * GAP).join(card[r] for card in cards)
+                 for r in range(CARD_HEIGHT)]
 
-        controls = ("←/→ move   ⏎ resume   s summarise   q quit")
+        live = sum(1 for s in self.sessions if s.is_live)
+        header_plain = f"Claude Code Manager   ·   session {i + 1}/{n} · {live} live"
+        header = (self._lpad(header_plain, cols)
+                  + self.paint("Claude Code Manager", "bold", "cyan")
+                  + self.paint(f"   ·   session {i + 1}/{n} · {live} live", "dim"))
+
+        if n <= 12:
+            dots_plain = " ".join("●" if k == i else "·" for k in range(n))
+        else:
+            dots_plain = f"‹ {i + 1}/{n} ›"
+        dots = self._lpad(dots_plain, cols) + self.paint(dots_plain, "cyan")
+
         if self.status:
-            controls = self.status
-        attr = (self._color("green") if self.status else curses.A_DIM)
-        self._put(stdscr, maxy - 1, max(2, (maxx - len(controls)) // 2),
-                  controls, attr | curses.A_BOLD, maxx, maxy)
+            ctrl_plain = self.status
+            ctrl = self._lpad(ctrl_plain, cols) + self.paint(ctrl_plain, "green", "bold")
+        else:
+            ctrl_plain = "←/→ move   ⏎ resume   s summarise   q quit"
+            ctrl = self._lpad(ctrl_plain, cols) + self.paint(ctrl_plain, "dim")
 
-    # -- navigation / actions -------------------------------------------
-    def _move(self, stdscr, delta: int) -> None:
-        n = len(self.sessions)
-        if n <= 1:
-            return
-        old = self.index
-        new = step_index(old, delta, n)
+        return [header, *strip, dots, ctrl]
+
+    @staticmethod
+    def _lpad(plain: str, cols: int) -> str:
+        return " " * max(0, (cols - len(plain)) // 2)
+
+    def _terminal_cols(self) -> int:
+        import shutil
+        return shutil.get_terminal_size((90, 24)).columns
+
+    def _render(self) -> None:
+        lines = self._frame(self._terminal_cols())
+        buf = []
+        if self._rendered:
+            buf.append(f"\033[{self._height}A")
+        for line in lines:
+            buf.append("\r\033[2K")
+            buf.append(line)
+            buf.append("\r\n")
+        sys.stdout.write("".join(buf))
+        sys.stdout.flush()
+        self._rendered = True
+        self._height = len(lines)
+
+    # -- background summaries -------------------------------------------
+    def _worker(self) -> None:
+        from claude_manager.summarize import SummaryError, summarize_session
+
+        for s in self.sessions:
+            if self._stop.is_set():
+                return
+            if s.summary:
+                continue
+            if self.cache is not None:
+                cached = self.cache.get(s)
+                if cached:
+                    s.summary = cached
+                    self._dirty.set()
+                    continue
+            try:
+                summary = summarize_session(
+                    s, model=self.summary_model, claude_bin=self.claude_bin
+                )
+            except SummaryError:
+                continue
+            if self._stop.is_set():
+                return
+            s.summary = summary
+            if self.cache is not None:
+                self.cache.set(s, summary)
+                self.cache.save()
+            self._dirty.set()
+
+    # -- actions ---------------------------------------------------------
+    def _move(self, delta: int) -> None:
+        self.index = step_index(self.index, delta, len(self.sessions))
         self.status = ""
-        # Animate a single neighbouring step; wrap-around jumps instantly.
-        if (delta == 1 and new == old + 1) or (delta == -1 and new == old - 1):
-            for f in range(1, _ANIM_FRAMES + 1):
-                t = f / _ANIM_FRAMES
-                eased = old + (new - old) * (t * t * (3 - 2 * t))  # smoothstep
-                self._render(stdscr, eased)
-                curses.napms(_ANIM_DELAY_MS)
-        self.index = new
-        self._render(stdscr, float(new))
+        self._render()
 
-    def _summarize(self, stdscr) -> None:
+    def _open(self) -> None:
+        session = self.sessions[self.index]
+        try:
+            launch_session(session, terminal=self.terminal,
+                           claude_bin=self.claude_bin)
+            self.status = f"▶ resuming {session.short_id} in {resolve_terminal(self.terminal)}"
+        except LaunchError as exc:
+            self.status = str(exc)
+        self._render()
+
+    def _summarize_current(self) -> None:
         from claude_manager.summarize import SummaryError, summarize_session
 
         session = self.sessions[self.index]
-        self.status = f"Summarising {session.short_id}…"
-        self._render(stdscr, float(self.index))
+        self.status = f"summarising {session.short_id}…"
+        self._render()
         try:
             summary = summarize_session(
                 session, model=self.summary_model, claude_bin=self.claude_bin
             )
         except SummaryError as exc:
-            self.status = f"Summary failed: {exc}"
-            self._render(stdscr, float(self.index))
+            self.status = f"summary failed: {exc}"
+            self._render()
             return
         session.summary = summary
         if self.cache is not None:
             self.cache.set(session, summary)
             self.cache.save()
         self.status = "✓ summarised"
-        self._render(stdscr, float(self.index))
+        self._render()
 
-    def _open(self, stdscr) -> None:
-        session = self.sessions[self.index]
+    # -- input -----------------------------------------------------------
+    def _read_key(self, fd: int) -> str | None:
         try:
-            launch_session(session, terminal=self.terminal,
-                           claude_bin=self.claude_bin)
-            term = resolve_terminal(self.terminal)
-            self.status = f"▶ Resuming {session.short_id} in {term}…"
-        except LaunchError as exc:
-            self.status = str(exc)
-        curses.flash()
-        self._render(stdscr, float(self.index))
+            data = os.read(fd, 16)
+        except OSError:
+            return None
+        if not data:
+            return None
+        if data[0] == 0x1b:
+            if len(data) == 1:
+                return "esc"
+            if data[1:2] == b"[":
+                return {
+                    b"C": "right", b"D": "left", b"A": "left", b"B": "right",
+                    b"H": "home", b"F": "end",
+                }.get(data[2:3])
+            return "esc"
+        if data[0] == 3:  # Ctrl-C
+            return "q"
+        ch = chr(data[0]).lower()
+        if ch == "q":
+            return "q"
+        if ch in ("a", "h", "p"):
+            return "left"
+        if ch in ("d", "l", "n"):
+            return "right"
+        if ch == "s":
+            return "summarise"
+        if ch in ("\r", "\n", " "):
+            return "open"
+        return None
 
-    def run(self, stdscr) -> None:
-        curses.curs_set(0)
-        self._init_colors()
-        stdscr.keypad(True)
-        self._render(stdscr, float(self.index))
-        while True:
-            try:
-                key = stdscr.getch()
-            except KeyboardInterrupt:
-                return
-            if key in _QUIT_KEYS:
-                return
-            elif key in _PREV_KEYS:
-                self._move(stdscr, -1)
-            elif key in _NEXT_KEYS:
-                self._move(stdscr, +1)
-            elif key in (curses.KEY_HOME,):
-                self.index = 0
-                self.status = ""
-                self._render(stdscr, 0.0)
-            elif key in (curses.KEY_END,):
-                self.index = len(self.sessions) - 1
-                self.status = ""
-                self._render(stdscr, float(self.index))
-            elif key in _OPEN_KEYS:
-                self._open(stdscr)
-            elif key in (ord("s"), ord("S")):
-                self._summarize(stdscr)
-            elif key == curses.KEY_RESIZE:
-                self._render(stdscr, float(self.index))
+    def run(self) -> None:
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        sys.stdout.write("\n")  # a little breathing room above the widget
+        try:
+            tty.setcbreak(fd)
+            sys.stdout.write("\033[?25l")  # hide cursor
+            sys.stdout.flush()
+            self._render()
+            self._thread = threading.Thread(target=self._worker, daemon=True)
+            self._thread.start()
+            while True:
+                try:
+                    ready, _, _ = select.select([sys.stdin], [], [], _POLL_SECONDS)
+                except (OSError, ValueError):
+                    break
+                if ready:
+                    key = self._read_key(fd)
+                    if key in ("q", "esc"):
+                        break
+                    elif key == "left":
+                        self._move(-1)
+                    elif key == "right":
+                        self._move(1)
+                    elif key == "home":
+                        self.index = 0
+                        self.status = ""
+                        self._render()
+                    elif key == "end":
+                        self.index = len(self.sessions) - 1
+                        self.status = ""
+                        self._render()
+                    elif key == "open":
+                        self._open()
+                    elif key == "summarise":
+                        self._summarize_current()
+                if self._dirty.is_set():
+                    self._dirty.clear()
+                    self._render()
+        finally:
+            self._stop.set()
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            sys.stdout.write("\033[?25h\r\n")  # show cursor, move below widget
+            sys.stdout.flush()
 
 
 def carousel(sessions: list[Session], *, terminal: str | None = None,
              claude_bin: str | None = None, cache=None,
              summary_model: str | None = None) -> None:
-    """Run the interactive carousel until the user quits."""
+    """Run the inline carousel until the user quits."""
     if not sessions:
         print("No sessions to show.")
         return
-    curses.wrapper(
-        Carousel(sessions, terminal=terminal, claude_bin=claude_bin,
-                 cache=cache, summary_model=summary_model).run
-    )
+    if not _HAVE_TERMIOS or not sys.stdin.isatty():
+        print("The carousel needs an interactive POSIX terminal.")
+        return
+    InlineCarousel(sessions, terminal=terminal, claude_bin=claude_bin,
+                   cache=cache, summary_model=summary_model).run()
