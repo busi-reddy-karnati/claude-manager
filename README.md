@@ -123,6 +123,62 @@ Summaries are cached at `~/.cache/claude-manager/summaries.json`, keyed so a
 session is only re-summarised when it changes. The carousel shows cached
 summaries automatically; pressing **`s`** summarises the focused card on the fly.
 
+#### Check your setup works
+
+Summaries shell out to your `claude` CLI, so they automatically use whatever
+backend you've configured — the Anthropic API, Amazon Bedrock, Google Vertex, or
+a company gateway such as **Microsoft Azure AI Foundry**. Auth, base URL, and
+proxy settings are inherited; there's nothing extra to wire up.
+
+Verify it in one command:
+
+```bash
+claude -p "say hi" --model haiku
+```
+
+If you get a reply, like:
+
+```
+Hey! 👋 How can I help you with your code today?
+```
+
+then `claude-manager summarize` will work as-is.
+
+#### If it doesn't respond
+
+1. **Make sure plain `claude` works first.** Run `claude -p "say hi"` (no
+   `--model`). If *that* fails, it's an auth/login or network issue with Claude
+   Code itself — fix that before summaries can work (e.g. `claude` to log in, or
+   check your corporate proxy / VPN).
+
+2. **If only the `--model haiku` part errors** (e.g. "model not found"), your
+   backend doesn't recognise the `haiku` alias. This is common on
+   Bedrock / Vertex / Azure Foundry, where models are addressed by a provider
+   model id or a **deployment name**. Point claude-manager at the right one:
+
+   ```bash
+   export CLAUDE_MANAGER_SUMMARY_MODEL="<your-model-id-or-deployment-name>"
+   # or per-run:
+   claude-manager summarize --model "<your-model-id-or-deployment-name>"
+   ```
+
+   Tip: use the same small/fast model your Claude Code is already set up with —
+   on a managed backend that's usually the value of `ANTHROPIC_SMALL_FAST_MODEL`:
+
+   ```bash
+   claude-manager summarize --model "$ANTHROPIC_SMALL_FAST_MODEL"
+   ```
+
+3. **Confirm.** Re-run the check with your model, then summarise one session:
+
+   ```bash
+   claude -p "say hi" --model "<your-model>"
+   claude-manager summarize --project <a-project-name>
+   ```
+
+If summaries still aren't available, the carousel simply falls back to showing
+each session's first prompt — everything else keeps working.
+
 Prefer a different style? `claude-manager console` is a numbered, paginated list
 (type a number to resume), and `claude-manager browse` is a mouse-clickable
 table.
