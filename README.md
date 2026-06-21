@@ -102,36 +102,31 @@ MEMORY
 ## Interactive carousel
 
 Running `claude-manager` with no arguments (in a terminal) drops you into the
-**carousel** — one session per card, flip through them with a single key press:
+**carousel** — a small, inline widget (about ten lines tall; it doesn't take over
+your whole screen) showing a few session cards at once:
 
 ```
-  Claude Code Manager
-  session 2 of 12  ·  1 live
+                     Claude Code Manager   ·   session 1/4 · 1 live
 
-              ╭──────────────────────────────────────────────╮
-              │ Fitnesswispr                                  │
-              │                                               │
-              │ I along with a lot of gym goers need to       │
-              │ reconsider their workout plans…               │
-              │                                               │
-              │ last accessed   38s ago                       │
-              │                 2026-06-21 00:07              │
-              │ tokens          389.3M                        │
-              ╰──────────────────────────────────────────────╯
-
-                              · ● · · · · · · · · · ·
-        ←/→  a/d  h/l  n/p   move      ⏎ / space   resume      q   quit
+   ╭────────────────────────────────╮   ╭────────────────────────────────╮   ╭───────────────…
+   │ Fitnesswispr                   │   │ ● CodeReviewer                 │   │ CodeReviewer    …
+   │ Reconsider gym workout plans   │   │ Create code review rules and   │   │ Say hi smoke te…
+   │                                │   │ skills                         │   │                 …
+   │ 2h ago · 2026-06-21 05:57      │   │ 7m ago · 2026-06-21 07:50      │   │ 14m ago · 2026-…
+   │ 5.6M tokens                    │   │ 1.6M tokens                    │   │ 37k tokens      …
+   ╰────────────────────────────────╯   ╰────────────────────────────────╯   ╰───────────────…
+                                            ● · · ·
+                              ←/→ move   ⏎ resume   s summarise   q quit
 ```
 
-Several cards are shown at once (the focused one is highlighted), and each keeps
-it simple: a **summary** of what the session was about, **when you last accessed
-it**, and its **token** usage.
+The focused card (centre) is highlighted; each keeps it simple: a **summary** of
+what the session was about, **when you last accessed it**, and its **token** usage.
 
 * **← / →** (or `a`/`d`, `h`/`l`, `n`/`p`) → flip to the previous / next session.
-  No Enter required — it moves on the key press, with a quick slide animation.
+  No Enter required — it moves on the key press.
 * **Enter / Space** → resume the focused session in your default terminal
   (`claude --resume <id>`).
-* **`s`** → summarise the focused session right now (see below).
+* **`s`** → re-summarise the focused session now.
 * **Home / End** → jump to the first / last session.
 * **`q`** → quit.
 
@@ -139,26 +134,32 @@ it**, and its **token** usage.
 claude-manager carousel              # same thing, explicitly
 ```
 
+Summaries are generated **in the background**: cards appear immediately using any
+summary that already exists, and the rest fill in as they're produced — the
+carousel never blocks waiting for them.
+
 ### AI summaries
 
-By default a card shows the session's first prompt. For a cleaner one-line
-**summary of what the session was actually about**, claude-manager asks Claude —
-reusing the `claude` CLI you already have (no API key needed), in non-interactive
-mode with a small, fast model. The model is chosen in this order:
+Instead of the raw first prompt, each card shows a one-line **summary of what the
+session was actually about**. claude-manager generates these by reusing the
+`claude` CLI you already have (no API key needed), in non-interactive mode with a
+small, fast model. The model is chosen in this order:
 `--model` → `CLAUDE_MANAGER_SUMMARY_MODEL` → `ANTHROPIC_SMALL_FAST_MODEL` (the
 small model your Claude Code is already configured with) → the `haiku` alias —
 so it works out of the box on managed backends like Bedrock, Vertex, or Azure
 Foundry without extra setup.
+
+Summaries are cached at `~/.cache/claude-manager/summaries.json`, keyed by a
+content fingerprint, so an unchanged session is **never summarised twice**. The
+carousel fills them in the background and reuses the cache on the next run;
+pressing **`s`** re-summarises the focused card on the fly. You can also
+pre-generate them in one go:
 
 ```bash
 claude-manager summarize             # summarise all sessions, cache the results
 claude-manager summarize --force     # re-summarise everything
 claude-manager summarize --model sonnet
 ```
-
-Summaries are cached at `~/.cache/claude-manager/summaries.json`, keyed so a
-session is only re-summarised when it changes. The carousel shows cached
-summaries automatically; pressing **`s`** summarises the focused card on the fly.
 
 #### Check your setup works
 

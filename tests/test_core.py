@@ -263,9 +263,22 @@ def test_carousel_card_shows_summary_age_tokens():
                 usage=TokenUsage(input=1_000_000, output=300_000))
     text = "\n".join(card_lines(s, 40))
     assert "Backup my zsh config" in text
-    assert "last" in text
+    assert "ago" in text
     assert "tokens" in text
     assert "1.3M" in text  # token total, humanised
+
+
+def test_inline_carousel_frame_is_compact():
+    from claude_manager.carousel import InlineCarousel, CARD_HEIGHT
+
+    sessions = _make_sessions(6)
+    c = InlineCarousel(sessions, color=False)
+    lines = c._frame(cols=120)
+    # header + card strip + dots + controls — a small, fixed-height widget.
+    assert len(lines) == CARD_HEIGHT + 3
+    text = "\n".join(lines)
+    assert "session 1/6" in text
+    assert "resume" in text and "quit" in text
 
 
 def test_card_prefers_summary_over_title():
