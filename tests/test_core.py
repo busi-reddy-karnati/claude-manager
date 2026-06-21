@@ -269,16 +269,21 @@ def test_carousel_card_shows_summary_age_tokens():
 
 
 def test_inline_carousel_frame_is_compact():
-    from claude_manager.carousel import InlineCarousel, CARD_HEIGHT
+    from claude_manager.carousel import InlineCarousel, CARD_HEIGHT, DETAIL_LINES
 
     sessions = _make_sessions(6)
+    sessions[0].summary = "A clear focused summary shown below"
     c = InlineCarousel(sessions, color=False)
     lines = c._frame(cols=120)
-    # header + card strip + dots + controls — a small, fixed-height widget.
-    assert len(lines) == CARD_HEIGHT + 3
+    # header + card strip + dots + detail + controls — a small, fixed-height widget.
+    assert len(lines) == CARD_HEIGHT + 3 + DETAIL_LINES
     text = "\n".join(lines)
     assert "session 1/6" in text
     assert "resume" in text and "quit" in text
+    # The focused card's full summary is shown in the detail area below.
+    assert "A clear focused summary shown below" in text
+    # Generation progress is surfaced while sessions are unsummarised.
+    assert "summarising 1/6" in text
 
 
 def test_card_prefers_summary_over_title():

@@ -38,6 +38,7 @@ except ImportError:  # pragma: no cover - non-POSIX
 
 CARD_INNER_LINES = 5      # header + 2 summary + time + tokens
 CARD_HEIGHT = CARD_INNER_LINES + 2   # + top/bottom border
+DETAIL_LINES = 2          # full summary of the focused card, shown below
 GAP = 3                   # columns between cards
 _POLL_SECONDS = 0.15
 
@@ -171,16 +172,36 @@ class InlineCarousel:
                  for r in range(CARD_HEIGHT)]
 
         live = sum(1 for s in self.sessions if s.is_live)
-        header_plain = f"Claude Code Manager   ·   session {i + 1}/{n} · {live} live"
+        done = sum(1 for s in self.sessions if s.summary)
+        meta = f"   ·   session {i + 1}/{n} · {live} live"
+        if done < n:
+            meta += f" · summarising {done}/{n}…"
+        header_plain = f"Claude Code Manager{meta}"
         header = (self._lpad(header_plain, cols)
                   + self.paint("Claude Code Manager", "bold", "cyan")
-                  + self.paint(f"   ·   session {i + 1}/{n} · {live} live", "dim"))
+                  + self.paint(meta, "dim"))
 
         if n <= 12:
             dots_plain = " ".join("●" if k == i else "·" for k in range(n))
         else:
             dots_plain = f"‹ {i + 1}/{n} ›"
         dots = self._lpad(dots_plain, cols) + self.paint(dots_plain, "cyan")
+
+        # Full summary of the focused ("highlighted") card, shown below.
+        focused = self.sessions[i]
+        if focused.summary:
+            detail_text, detail_style = focused.summary, ("cyan",)
+        elif focused.title:
+            detail_text, detail_style = focused.title, ("dim",)
+        else:
+            detail_text, detail_style = "summarising…", ("dim",)
+        detail_rows = []
+        for line in wrap_text(detail_text, min(cols - 6, 88), DETAIL_LINES):
+            if line:
+                detail_rows.append(self._lpad(line, cols)
+                                   + self.paint(line, *detail_style))
+            else:
+                detail_rows.append("")
 
         if self.status:
             ctrl_plain = self.status
@@ -189,7 +210,7 @@ class InlineCarousel:
             ctrl_plain = "←/→ move   ⏎ resume   s summarise   q quit"
             ctrl = self._lpad(ctrl_plain, cols) + self.paint(ctrl_plain, "dim")
 
-        return [header, *strip, dots, ctrl]
+        return [header, *strip, dots, *detail_rows, ctrl]
 
     @staticmethod
     def _lpad(plain: str, cols: int) -> str:

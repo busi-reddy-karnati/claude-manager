@@ -106,21 +106,25 @@ Running `claude-manager` with no arguments (in a terminal) drops you into the
 your whole screen) showing a few session cards at once:
 
 ```
-                     Claude Code Manager   ·   session 1/4 · 1 live
+            Claude Code Manager   ·   session 2/4 · 1 live · summarising 3/4…
 
    ╭────────────────────────────────╮   ╭────────────────────────────────╮   ╭───────────────…
    │ Fitnesswispr                   │   │ ● CodeReviewer                 │   │ CodeReviewer    …
    │ Reconsider gym workout plans   │   │ Create code review rules and   │   │ Say hi smoke te…
-   │                                │   │ skills                         │   │                 …
+   │                                │   │ agent skills                   │   │                 …
    │ 2h ago · 2026-06-21 05:57      │   │ 7m ago · 2026-06-21 07:50      │   │ 14m ago · 2026-…
    │ 5.6M tokens                    │   │ 1.6M tokens                    │   │ 37k tokens      …
    ╰────────────────────────────────╯   ╰────────────────────────────────╯   ╰───────────────…
                                             ● · · ·
+                          Create code review rules and agent skills
+
                               ←/→ move   ⏎ resume   s summarise   q quit
 ```
 
-The focused card (centre) is highlighted; each keeps it simple: a **summary** of
-what the session was about, **when you last accessed it**, and its **token** usage.
+The focused card (centre) is highlighted, and its **full summary** is shown on
+the line below (cards truncate; the detail line doesn't). Each card keeps it
+simple: a **summary** of what the session was about, **when you last accessed
+it**, and its **token** usage.
 
 * **← / →** (or `a`/`d`, `h`/`l`, `n`/`p`) → flip to the previous / next session.
   No Enter required — it moves on the key press.
