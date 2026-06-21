@@ -90,19 +90,38 @@ Running `claude-manager` with no arguments (in a terminal) drops you into the
         ←/→  a/d  h/l  n/p   move      ⏎ / space   resume      q   quit
 ```
 
-Each card keeps it simple: a **summary** of what the session was about, **when
-you last accessed it**, and its **token** usage.
+Several cards are shown at once (the focused one is highlighted), and each keeps
+it simple: a **summary** of what the session was about, **when you last accessed
+it**, and its **token** usage.
 
 * **← / →** (or `a`/`d`, `h`/`l`, `n`/`p`) → flip to the previous / next session.
   No Enter required — it moves on the key press, with a quick slide animation.
 * **Enter / Space** → resume the focused session in your default terminal
   (`claude --resume <id>`).
+* **`s`** → summarise the focused session right now (see below).
 * **Home / End** → jump to the first / last session.
 * **`q`** → quit.
 
 ```bash
 claude-manager carousel              # same thing, explicitly
 ```
+
+### AI summaries
+
+By default a card shows the session's first prompt. For a cleaner one-line
+**summary of what the session was actually about**, claude-manager asks Claude —
+reusing the `claude` CLI you already have (no API key needed), in non-interactive
+mode with a fast model (Haiku):
+
+```bash
+claude-manager summarize             # summarise all sessions, cache the results
+claude-manager summarize --force     # re-summarise everything
+claude-manager summarize --model sonnet
+```
+
+Summaries are cached at `~/.cache/claude-manager/summaries.json`, keyed so a
+session is only re-summarised when it changes. The carousel shows cached
+summaries automatically; pressing **`s`** summarises the focused card on the fly.
 
 Prefer a different style? `claude-manager console` is a numbered, paginated list
 (type a number to resume), and `claude-manager browse` is a mouse-clickable

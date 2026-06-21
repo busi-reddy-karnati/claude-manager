@@ -143,6 +143,19 @@ class Session:
     # Populated from sessions/<pid>.json when the process is still alive.
     live_pid: int | None = None
     started_at: datetime | None = None
+    # Optional LLM-generated summary (see claude_manager.summarize); falls back
+    # to ``title`` when absent.
+    summary: str | None = None
+
+    @property
+    def display_summary(self) -> str:
+        return self.summary or self.title
+
+    @property
+    def fingerprint(self) -> str:
+        """Cheap identity of the session's content, for cache invalidation."""
+        last = self.last_ts.isoformat() if self.last_ts else ""
+        return f"{self.message_count}:{last}"
 
     @property
     def short_id(self) -> str:
@@ -223,6 +236,33 @@ def parse_session(path: Path) -> Session:
                 session.title = text
 
     return session
+
+
+def read_transcript_text(
+    path: Path, max_chars: int = 4000, max_messages: int = 24
+) -> str:
+    """Return a compact text excerpt of a session transcript for summarising.
+
+    Concatenates the user/assistant message text (role-prefixed), stopping once
+    ``max_chars`` or ``max_messages`` is reached.
+    """
+    parts: list[str] = []
+    total = 0
+    for obj in _iter_jsonl(path):
+        if obj.get("type") not in _MESSAGE_TYPES:
+            continue
+        message = obj.get("message")
+        if not isinstance(message, dict):
+            continue
+        text = _text_from_content(message.get("content")).strip()
+        if not text:
+            continue
+        chunk = f"{obj['type']}: {text}"
+        parts.append(chunk)
+        total += len(chunk)
+        if total >= max_chars or len(parts) >= max_messages:
+            break
+    return "\n".join(parts)[:max_chars]
 
 
 def _load_live_sessions(home: Path) -> dict[str, dict]:

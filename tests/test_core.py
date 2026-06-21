@@ -263,9 +263,62 @@ def test_carousel_card_shows_summary_age_tokens():
                 usage=TokenUsage(input=1_000_000, output=300_000))
     text = "\n".join(card_lines(s, 40))
     assert "Backup my zsh config" in text
-    assert "last accessed" in text
+    assert "last" in text
     assert "tokens" in text
     assert "1.3M" in text  # token total, humanised
+
+
+def test_card_prefers_summary_over_title():
+    from claude_manager.core import Session
+    from claude_manager.carousel import card_lines
+
+    s = Session(session_id="x", path=Path("/tmp/x.jsonl"),
+                title="raw first prompt that is long", summary="Tidy summary")
+    text = "\n".join(card_lines(s, 40))
+    assert "Tidy summary" in text
+    assert "raw first prompt" not in text
+
+
+def test_summary_cache_roundtrip_and_fingerprint(tmp_path):
+    from claude_manager.core import Session
+    from claude_manager.summarize import SummaryCache
+    from datetime import datetime, timezone
+
+    s = Session(session_id="sess-1", path=tmp_path / "s.jsonl",
+                message_count=4,
+                last_ts=datetime(2026, 6, 21, tzinfo=timezone.utc))
+    cache = SummaryCache(path=tmp_path / "summaries.json")
+    assert cache.get(s) is None
+    cache.set(s, "A neat summary")
+    cache.save()
+
+    reloaded = SummaryCache(path=tmp_path / "summaries.json")
+    assert reloaded.get(s) == "A neat summary"
+    assert reloaded.apply([s]) == 1 and s.summary == "A neat summary"
+
+    # Changing the session content invalidates the cached summary.
+    s.message_count = 5
+    assert reloaded.get(s) is None
+
+
+def test_summary_prompt_and_excerpt(tmp_path):
+    from claude_manager.core import read_transcript_text
+    from claude_manager.summarize import build_prompt
+
+    path = tmp_path / "t.jsonl"
+    _write_jsonl(path, [
+        {"type": "user", "message": {"role": "user", "content": "Fix the auth bug"}},
+        {"type": "assistant",
+         "message": {"role": "assistant", "content": [
+             {"type": "text", "text": "Sure, looking now"}]}},
+        {"type": "queue-operation"},
+    ])
+    excerpt = read_transcript_text(path)
+    assert "user: Fix the auth bug" in excerpt
+    assert "assistant: Sure, looking now" in excerpt
+    assert "queue-operation" not in excerpt
+    prompt = build_prompt(excerpt)
+    assert "single concise phrase" in prompt and "Fix the auth bug" in prompt
 
 
 if __name__ == "__main__":

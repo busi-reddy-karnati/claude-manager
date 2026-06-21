@@ -87,32 +87,34 @@ def card_lines(session: Session, inner_width: int, now: datetime | None = None) 
     """
     now = now or datetime.now(timezone.utc)
     iw = max(10, inner_width)
-    summary = wrap_text(session.title or "(no prompt)", iw, 3)
+    summary = wrap_text(session.display_summary or "(no prompt)", iw, 3)
     age = human_age(session.last_ts, now)
     when = human_dt(session.last_ts)
+    header = (("● " if session.is_live else "") + session.project_name)[:iw]
     lines = [
-        ("● LIVE" if session.is_live else session.project_name)[:iw],
+        header,
         "",
         summary[0],
         summary[1],
         summary[2],
         "",
-        f"last accessed   {age} ago"[:iw],
-        f"                {when}"[:iw],
-        f"tokens          {human_count(session.usage.total)}"[:iw],
+        f"last  {age} ago · {when}"[:iw],
+        f"tokens  {human_count(session.usage.total)}"[:iw],
     ]
     return lines
 
 
 class Carousel:
-    CARD_MIN_W = 28
-    CARD_MAX_W = 64
+    CARD_MIN_W = 22
+    CARD_MAX_W = 40
 
     def __init__(self, sessions: list[Session], *, terminal: str | None = None,
-                 claude_bin: str | None = None):
+                 claude_bin: str | None = None, cache=None, summary_model=None):
         self.sessions = sessions
         self.terminal = terminal
         self.claude_bin = claude_bin
+        self.cache = cache              # optional SummaryCache
+        self.summary_model = summary_model
         self.index = 0
         self.status = ""
         self._colors: dict[str, int] = {}
@@ -147,7 +149,9 @@ class Carousel:
 
     # -- geometry --------------------------------------------------------
     def _card_width(self, maxx: int) -> int:
-        return max(self.CARD_MIN_W, min(self.CARD_MAX_W, maxx - 6))
+        # Aim for ~3 cards across so several are visible at once.
+        width = (maxx - 16) // 3
+        return max(self.CARD_MIN_W, min(self.CARD_MAX_W, width))
 
     def _card_rows(self, session: Session, focused: bool, width: int,
                    now: datetime):
@@ -159,12 +163,11 @@ class Carousel:
                 else self._color("cyan") | curses.A_BOLD
             line_attrs = [
                 (self._color("green") | curses.A_BOLD) if session.is_live
-                else (self._color("cyan") | curses.A_BOLD),  # project / LIVE
+                else (self._color("cyan") | curses.A_BOLD),  # project header
                 0,
-                curses.A_BOLD, curses.A_BOLD, curses.A_BOLD,  # summary
+                curses.A_BOLD, curses.A_BOLD, curses.A_BOLD,  # summary (3 lines)
                 0,
                 self._color("yellow"),                         # last accessed
-                self._color("yellow") | curses.A_DIM,
                 self._color("green") | curses.A_BOLD,          # tokens
             ]
         else:
@@ -241,7 +244,7 @@ class Carousel:
         self._put(stdscr, maxy - 3, max(2, (maxx - len(dots)) // 2), dots,
                   self._color("cyan"), maxx, maxy)
 
-        controls = "←/→  a/d  h/l  n/p   move      ⏎ / space   resume      q   quit"
+        controls = ("←/→ move   ⏎ resume   s summarise   q quit")
         if self.status:
             controls = self.status
         attr = (self._color("green") if self.status else curses.A_DIM)
@@ -265,6 +268,27 @@ class Carousel:
                 curses.napms(_ANIM_DELAY_MS)
         self.index = new
         self._render(stdscr, float(new))
+
+    def _summarize(self, stdscr) -> None:
+        from claude_manager.summarize import SummaryError, summarize_session
+
+        session = self.sessions[self.index]
+        self.status = f"Summarising {session.short_id}…"
+        self._render(stdscr, float(self.index))
+        try:
+            summary = summarize_session(
+                session, model=self.summary_model, claude_bin=self.claude_bin
+            )
+        except SummaryError as exc:
+            self.status = f"Summary failed: {exc}"
+            self._render(stdscr, float(self.index))
+            return
+        session.summary = summary
+        if self.cache is not None:
+            self.cache.set(session, summary)
+            self.cache.save()
+        self.status = "✓ summarised"
+        self._render(stdscr, float(self.index))
 
     def _open(self, stdscr) -> None:
         session = self.sessions[self.index]
@@ -304,15 +328,20 @@ class Carousel:
                 self._render(stdscr, float(self.index))
             elif key in _OPEN_KEYS:
                 self._open(stdscr)
+            elif key in (ord("s"), ord("S")):
+                self._summarize(stdscr)
             elif key == curses.KEY_RESIZE:
                 self._render(stdscr, float(self.index))
 
 
 def carousel(sessions: list[Session], *, terminal: str | None = None,
-             claude_bin: str | None = None) -> None:
+             claude_bin: str | None = None, cache=None,
+             summary_model: str | None = None) -> None:
     """Run the interactive carousel until the user quits."""
     if not sessions:
         print("No sessions to show.")
         return
-    curses.wrapper(Carousel(sessions, terminal=terminal,
-                            claude_bin=claude_bin).run)
+    curses.wrapper(
+        Carousel(sessions, terminal=terminal, claude_bin=claude_bin,
+                 cache=cache, summary_model=summary_model).run
+    )
