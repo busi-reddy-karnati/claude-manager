@@ -37,6 +37,39 @@ The installer honours `CLAUDE_MANAGER_BIN_DIR` (install location),
 `CLAUDE_MANAGER_REF` (branch/tag/commit), and `CLAUDE_MANAGER_REPO`.
 </details>
 
+## Uninstall
+
+If you installed with the `curl | bash` one-liner or `make install`, remove the
+single executable:
+
+```bash
+rm -f ~/.local/bin/claude-manager
+```
+
+From a clone you can also run `make uninstall` (add `PREFIX=…` if you installed
+somewhere custom). Installed a different way? `pipx uninstall claude-manager`.
+
+That's everything claude-manager itself adds. It never modifies your Claude Code
+data — `~/.claude` is left untouched. To also drop the cached AI summaries:
+
+```bash
+rm -rf ~/.cache/claude-manager
+```
+
+<details>
+<summary>Installed somewhere custom?</summary>
+
+If you set `CLAUDE_MANAGER_BIN_DIR` (or `PREFIX`/`BIN_DIR`) when installing,
+remove it from there instead — `which claude-manager` shows the path:
+
+```bash
+rm -f "$(command -v claude-manager)"
+```
+
+Likewise, if you set `XDG_CACHE_HOME`, the summary cache lives at
+`$XDG_CACHE_HOME/claude-manager` rather than `~/.cache/claude-manager`.
+</details>
+
 ## What it does
 
 Claude Code keeps a lot of useful state under `~/.claude` (session transcripts,
