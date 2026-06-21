@@ -1,51 +1,48 @@
 # claude-manager
 
-A single-screen overview of your Claude Code **sessions**, **memory**, and
-**timestamps** — all in one place.
-
-Claude Code keeps a lot of useful state under `~/.claude` (session transcripts,
-live process metadata, `CLAUDE.md` memory files), but it's spread across many
-files and not easy to survey at a glance. `claude-manager` reads that state
-directly and renders a compact dashboard in your terminal.
-
-It has **no dependencies** — just Python 3.9+ and the standard library.
+A single-screen terminal dashboard for your Claude Code **sessions**, **memory**,
+and **timestamps** — and a fast way to resume any of them.
 
 ## Install
-
-One line — downloads the source, builds a single self-contained executable with
-your local Python (no dependencies), and installs it to `~/.local/bin`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/busi-reddy-karnati/claude-manager/main/install.sh | bash
 ```
 
-Then just run:
+Then run:
 
 ```bash
 claude-manager
 ```
 
-Prefer not to pipe to `bash`? Download and read it first, or install from a clone:
+No dependencies — just Python 3.9+ and the standard library. The installer
+downloads the source, builds a single self-contained executable with your local
+Python, and installs it to `~/.local/bin`.
+
+<details>
+<summary>Other ways to install &amp; run</summary>
 
 ```bash
+# From a clone — no curl | bash
 git clone https://github.com/busi-reddy-karnati/claude-manager
 cd claude-manager
-make install        # builds dist/claude-manager and copies it to ~/.local/bin
+make install          # build + copy to ~/.local/bin   (make uninstall to remove)
+
+# Run straight from source, or install as a package
+python3 -m claude_manager
+pipx install .        # exposes the `claude-manager` command
 ```
 
 The installer honours `CLAUDE_MANAGER_BIN_DIR` (install location),
-`CLAUDE_MANAGER_REF` (branch/tag/commit), and `CLAUDE_MANAGER_REPO`. To remove
-it: `make uninstall` (or delete `~/.local/bin/claude-manager`).
-
-<details>
-<summary>Other ways to run it</summary>
-
-* **From source, no install:** `python3 -m claude_manager`
-* **As a pip/pipx package:** `pipx install .` (uses the `claude-manager` entry point)
-* **Build the single file yourself:** `make build` → `./dist/claude-manager`
+`CLAUDE_MANAGER_REF` (branch/tag/commit), and `CLAUDE_MANAGER_REPO`.
 </details>
 
-## Quick start
+## What it does
+
+Claude Code keeps a lot of useful state under `~/.claude` (session transcripts,
+live process metadata, `CLAUDE.md` memory files), but it's spread across many
+files and not easy to survey at a glance. `claude-manager` reads that state
+directly and renders a compact dashboard in your terminal.
 
 ## What you see
 
